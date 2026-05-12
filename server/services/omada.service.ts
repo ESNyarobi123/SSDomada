@@ -22,7 +22,7 @@ export class OmadaService {
    */
   static async listSites(): Promise<OmadaSite[]> {
     const res = await OmadaClient.get<OmadaApiResponse<OmadaSite>>(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites`
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites?page=1&pageSize=100`
     );
     return res.result.data;
   }
@@ -31,18 +31,54 @@ export class OmadaService {
    * Create a new site on Omada Controller (no DB write).
    * Returns the omadaSiteId on success, or null on failure.
    */
-  static async createOmadaSiteOnly(name: string, opts?: { scenario?: string; timeZone?: string }): Promise<string | null> {
+  static async createOmadaSiteOnly(
+    name: string,
+    opts?: {
+      scenario?: string;
+      timeZone?: string;
+      region?: string;
+      deviceUsername?: string;
+      devicePassword?: string;
+    }
+  ): Promise<string | null> {
+    const devicePassword = opts?.devicePassword || process.env.OMADA_DEVICE_PASSWORD;
+    if (!devicePassword) {
+      console.error("[OmadaService] createOmadaSiteOnly skipped: OMADA_DEVICE_PASSWORD is required by Omada OpenAPI");
+      return null;
+    }
+
+    const scenario = opts?.scenario || process.env.OMADA_SITE_SCENARIO || "General";
+    const timeZone = opts?.timeZone || process.env.OMADA_SITE_TIME_ZONE || "Africa/Dar_es_Salaam";
+    const region = opts?.region || process.env.OMADA_SITE_REGION || "Tanzania";
+    const deviceUsername = opts?.deviceUsername || process.env.OMADA_DEVICE_USERNAME || "ssdomada";
+
     try {
-      const omadaRes = await OmadaClient.post<{ errorCode: number; result: { siteId: string } }>(
+      const omadaRes = await OmadaClient.post<{ errorCode: number; msg?: string; result?: { siteId?: string } }>(
         `/openapi/v1/${OMADA_CONTROLLER_ID}/sites`,
         {
           name,
-          scenario: opts?.scenario || "Hotel",
-          timeZone: opts?.timeZone || "Africa/Dar_es_Salaam",
+          type: 0,
+          region,
+          timeZone,
+          scenario,
+          deviceAccountSetting: {
+            username: deviceUsername,
+            password: devicePassword,
+          },
+          supportES: true,
+          supportL2: true,
         }
       );
-      if (omadaRes.errorCode !== 0) return null;
-      return omadaRes.result.siteId;
+      if (omadaRes.errorCode !== 0) {
+        console.error("[OmadaService] createOmadaSiteOnly rejected:", omadaRes.msg || omadaRes.errorCode);
+        return null;
+      }
+
+      if (omadaRes.result?.siteId) return omadaRes.result.siteId;
+
+      // Some Omada versions return an empty result for create; fetch by name to link the DB row.
+      const sites = await this.listSites();
+      return sites.find((site) => site.name === name)?.siteId || null;
     } catch (err) {
       console.error("[OmadaService] createOmadaSiteOnly failed:", err);
       return null;

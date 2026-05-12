@@ -39,6 +39,7 @@ export default function ResellerWithdrawalsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState({
+    
     amount: 5000,
     channel: "MOBILE" as "MOBILE" | "BANK",
     recipientName: "",
