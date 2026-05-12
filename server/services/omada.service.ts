@@ -48,7 +48,7 @@ export class OmadaService {
     }
 
     const scenario = opts?.scenario || process.env.OMADA_SITE_SCENARIO || "General";
-    const timeZone = opts?.timeZone || process.env.OMADA_SITE_TIME_ZONE || "Africa/Dar_es_Salaam";
+    const timeZone = opts?.timeZone || process.env.OMADA_SITE_TIME_ZONE || "Africa/Nairobi";
     const region = opts?.region || process.env.OMADA_SITE_REGION || "Tanzania";
     const deviceUsername = opts?.deviceUsername || process.env.OMADA_DEVICE_USERNAME || "ssdomada";
 
