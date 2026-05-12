@@ -35,7 +35,7 @@ export class OmadaService {
     name: string,
     opts?: {
       scenario?: string;
-      timeZone?: string;
+      timeZone?: string; 
       region?: string;
       deviceUsername?: string;
       devicePassword?: string;

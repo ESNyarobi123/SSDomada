@@ -83,7 +83,7 @@ services:
       RADIUS_SECRET: "${RADIUS_SECRET:-SSDomada2026SecureR@dius}"
       RADIUS_NAS_IP: "${RADIUS_NAS_IP:-107.152.36.210}"
       NODE_ENV: production
-    ports:
+    ports:  
       - "3000:3000"
     networks:
       - ssdomada-net
