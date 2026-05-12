@@ -1,0 +1,33 @@
+# Adds Caddy for HTTPS (Let's Encrypt) on ssdomada.site.
+# Merge with the base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Caddy proxies to the app on the Docker network. Port 3000 on the app container
+# remains published by the base file — block it in your firewall on production
+# so only 80 and 443 are reachable from the internet.
+
+name: ssdomada
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: ssdomada-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - ssdomada-net
+
+volumes:
+  caddy_data:
+  caddy_config:

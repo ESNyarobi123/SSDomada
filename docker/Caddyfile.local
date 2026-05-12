@@ -1,0 +1,10 @@
+# Local / lab HTTPS without public DNS (Caddy internal CA).
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.local.yml up -d
+#
+# Add to /etc/hosts: 127.0.0.1 ssdomada.site
+
+ssdomada.site {
+	tls internal
+	encode gzip zstd
+	reverse_proxy app:3000
+}

@@ -1,0 +1,11 @@
+# HTTPS reverse proxy for SSDomada (Let's Encrypt when DNS A/AAAA points here).
+# Optional: set CADDY_EMAIL in .env and add a global options block if you want ACME email notices.
+
+www.ssdomada.site {
+	redir https://ssdomada.site{uri} permanent
+}
+
+ssdomada.site {
+	encode gzip zstd
+	reverse_proxy app:3000
+}

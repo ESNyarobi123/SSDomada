@@ -1,0 +1,28 @@
+# Local HTTPS (Caddy internal TLS). Add to /etc/hosts: 127.0.0.1 ssdomada.site
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.local.yml up -d
+
+name: ssdomada
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: ssdomada-caddy-local
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_data_local:/data
+      - caddy_config_local:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - ssdomada-net
+
+volumes:
+  caddy_data_local:
+  caddy_config_local:

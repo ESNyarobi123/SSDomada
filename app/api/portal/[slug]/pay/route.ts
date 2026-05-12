@@ -132,13 +132,15 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
 
     // 10. Call Snippe to create payment
+    const appBase =
+      process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "";
     const snippePayload = {
       amount: pkg.price,
       currency: reseller.currency,
       description: `WiFi - ${pkg.name} (${reseller.companyName})`,
-      callback_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/snippe`,
-      return_url: `${process.env.NEXT_PUBLIC_APP_URL}/portal/${slug}/success?session=${sessionId}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/portal/${slug}?session=${sessionId}&cancelled=true`,
+      callback_url: `${appBase}/api/webhooks/snippe`,
+      return_url: `${appBase}/portal/${slug}/success?session=${sessionId}`,
+      cancel_url: `${appBase}/portal/${slug}?session=${sessionId}&cancelled=true`,
       metadata: {
         paymentId: payment.id,
         sessionId,
@@ -155,7 +157,9 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     let checkoutUrl: string | null = null;
 
     try {
-      const snippeRes = await fetch(`${process.env.SNIPPE_API_URL}/payment-sessions`, {
+      const snippeApiBase =
+        process.env.SNIPPE_API_URL || process.env.SNIPPE_BASE_URL || "https://api.snippe.co.tz/v1";
+      const snippeRes = await fetch(`${snippeApiBase}/payment-sessions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
