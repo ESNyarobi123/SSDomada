@@ -1,0 +1,47 @@
+name: ssdomada-dev
+
+# Lightweight Docker stack — only runs PostgreSQL + Redis
+# Run app locally with: npm run dev
+# Use with: docker compose -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ssdomada-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ssdomada
+      POSTGRES_PASSWORD: ssdomada
+      POSTGRES_DB: ssdomada
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ssdomada -d ssdomada"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ssdomada-redis-dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+
+  # Optional: Adminer for browsing DB
+  adminer:
+    image: adminer:latest
+    container_name: ssdomada-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data_dev:
+  redis_data_dev:

@@ -1,0 +1,97 @@
+name: ssdomada
+
+services:
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ssdomada-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ssdomada
+      POSTGRES_PASSWORD: ssdomada
+      POSTGRES_DB: ssdomada
+    ports:
+      - "5433:5432"  # Use 5433 to avoid conflict with local PostgreSQL
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ssdomada -d ssdomada"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ssdomada-net
+
+  # ============================================================
+  # Redis Cache (for Omada token caching)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ssdomada-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ssdomada-net
+
+  # ============================================================
+  # SSDomada Next.js App
+  # ============================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ssdomada-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_URL: "postgresql://ssdomada:ssdomada@postgres:5432/ssdomada"
+      # Auth
+      NEXTAUTH_SECRET: "${NEXTAUTH_SECRET:-wiA72ps5SzKcFIb6ThvIqakwoBYN4TjUfHcqvbWlKD0=}"
+      NEXTAUTH_URL: "${NEXTAUTH_URL:-http://localhost:3000}"
+      NEXT_PUBLIC_APP_URL: "${NEXT_PUBLIC_APP_URL:-http://localhost:3000}"
+      # Redis
+      REDIS_URL: "redis://redis:6379"
+      # Omada
+      OMADA_URL: "${OMADA_URL:-https://server.ssdomada.site}"
+      OMADA_CONTROLLER_ID: "${OMADA_CONTROLLER_ID:-214e8438096716894ee88534b9c67f17}"
+      OMADA_CLIENT_ID: "${OMADA_CLIENT_ID:-f2745c9d60e34a37abae6870f65ff60e}"
+      OMADA_CLIENT_SECRET: "${OMADA_CLIENT_SECRET:-256c27a0b578428a90a250224050be5a}"
+      # Snippe
+      SNIPPE_API_URL: "${SNIPPE_API_URL:-https://api.snippe.co.tz/v1}"
+      SNIPPE_API_KEY: "${SNIPPE_API_KEY:-}"
+      SNIPPE_SECRET_KEY: "${SNIPPE_SECRET_KEY:-}"
+      SNIPPE_WEBHOOK_SECRET: "${SNIPPE_WEBHOOK_SECRET:-}"
+      # Cron
+      CRON_SECRET: "${CRON_SECRET:-}"
+      # RADIUS
+      RADIUS_SECRET: "${RADIUS_SECRET:-SSDomada2026SecureR@dius}"
+      RADIUS_NAS_IP: "${RADIUS_NAS_IP:-107.152.36.210}"
+      # Node
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    networks:
+      - ssdomada-net
+
+networks:
+  ssdomada-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

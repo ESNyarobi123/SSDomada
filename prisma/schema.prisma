@@ -1,0 +1,878 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  RESELLER
+  END_USER
+}
+
+enum DeviceStatus {
+  ONLINE
+  OFFLINE
+  PENDING
+}
+
+enum DeviceType {
+  AP
+  SWITCH
+  GATEWAY
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+enum PaymentType {
+  MOBILE      // Direct mobile money
+  CARD        // Card payment
+  SESSION     // Hosted checkout (Payment Session)
+  QR          // QR code payment
+}
+
+enum PayoutStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum PayoutChannel {
+  MOBILE      // M-Pesa, Airtel Money, etc.
+  BANK        // CRDB, NMB, NBC, ABSA, etc.
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  SUSPENDED
+}
+
+enum ResellerPlanStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  EXPIRED
+  CANCELLED
+}
+
+enum ResellerPlanInterval {
+  MONTHLY
+  YEARLY
+  LIFETIME
+}
+
+enum PackageDuration {
+  MINUTES_30
+  HOUR_1
+  HOURS_3
+  HOURS_6
+  HOURS_12
+  HOURS_24
+  DAYS_3
+  DAYS_7
+  DAYS_14
+  DAYS_30
+  DAYS_90
+  DAYS_365
+  LIFETIME
+  UNLIMITED
+}
+
+// ============================================================
+// AUTH — NextAuth.js compatible tables
+// ============================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ============================================================
+// USER
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  phone         String?
+  role          UserRole  @default(END_USER)
+  isActive      Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  // If user is a reseller
+  reseller Reseller?
+
+  // If user is an end-user (WiFi customer)
+  wifiSessions  WifiSession[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  redeemedVouchers Voucher[]
+  radiusUsers      RadiusUser[]
+
+  @@map("users")
+}
+
+// ============================================================
+// RESELLER — Extended profile for reseller users
+// ============================================================
+
+model Reseller {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  companyName String
+  brandSlug   String  @unique // used in captive portal URL: /portal/[brandSlug]
+  logo        String?
+  description String?
+  phone       String?
+  address     String?
+
+  // Omada Controller info
+  omadaSiteId String? @unique // the site ID on Omada Controller
+
+  // Financial
+  commissionRate Float   @default(0.10) // platform takes 10% by default
+  walletBalance  Float   @default(0.00) // available balance for withdrawal
+  totalEarnings  Float   @default(0.00)
+  currency       String  @default("TZS")
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sites              Site[]
+  devices            Device[]
+  packages           Package[]
+  payments           Payment[]
+  payouts            Payout[]
+  withdrawals        Withdrawal[]
+  captivePortalConfig CaptivePortalConfig?
+  vouchers           Voucher[]
+  blockedMacs        BlockedMac[]
+  ssidConfigs        SsidConfig[]
+  notificationPreference NotificationPreference?
+  radiusUsers        RadiusUser[]
+  portalSessions     PortalSession[]
+  planSubscription   ResellerPlanSubscription?
+
+  @@map("resellers")
+}
+
+// ============================================================
+// SITE — Omada Site (each reseller has one or more sites)
+// ============================================================
+
+model Site {
+  id         String  @id @default(cuid())
+  resellerId String
+  name       String
+  omadaSiteId String? @unique // Omada's internal site ID
+  location   String?
+  isActive   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  devices      Device[]
+  wifiSessions WifiSession[]
+  ssidConfigs  SsidConfig[]
+
+  @@map("sites")
+}
+
+// ============================================================
+// DEVICE — Access Points and other Omada devices
+// ============================================================
+
+model Device {
+  id          String       @id @default(cuid())
+  resellerId  String
+  siteId      String
+  name        String
+  mac         String       @unique
+  model       String?
+  type        DeviceType   @default(AP)
+  status      DeviceStatus @default(PENDING)
+  ip          String?
+  omadaDeviceId String?    // Omada's internal device ID
+  firmwareVersion String?
+  lastSeen    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  site     Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("devices")
+}
+
+// ============================================================
+// PACKAGE — WiFi subscription packages defined by reseller
+// ============================================================
+
+model Package {
+  id          String          @id @default(cuid())
+  resellerId  String
+  name        String          // e.g. "1 Hour", "Daily", "Weekly"
+  description String?
+  price       Float
+  currency    String          @default("TZS")
+  duration    PackageDuration
+  durationMinutes Int         // actual duration in minutes (for calculation)
+  dataLimitMb Int?            // optional data cap in MB
+  speedLimitUp   Int?         // upload speed limit in Kbps
+  speedLimitDown Int?         // download speed limit in Kbps
+  maxDevices  Int             @default(1) // how many devices can connect
+  isActive    Boolean         @default(true)
+  isFeatured  Boolean         @default(false) // highlighted on captive portal
+  sortOrder   Int             @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller      Reseller       @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  subscriptions Subscription[]
+  vouchers      Voucher[]
+
+  @@map("packages")
+}
+
+// ============================================================
+// SUBSCRIPTION — End-user's active WiFi subscription
+// ============================================================
+
+model Subscription {
+  id        String             @id @default(cuid())
+  userId    String
+  packageId String
+  status    SubscriptionStatus @default(ACTIVE)
+  startedAt DateTime           @default(now())
+  expiresAt DateTime
+  dataUsedMb Float             @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  payment      Payment?
+  wifiSessions WifiSession[]
+  radiusUsers  RadiusUser[]
+
+  @@map("subscriptions")
+}
+
+// ============================================================
+// WIFI SESSION — Tracks individual connection sessions
+// ============================================================
+
+model WifiSession {
+  id             String   @id @default(cuid())
+  userId         String
+  siteId         String
+  subscriptionId String?
+  clientMac      String
+  clientIp       String?
+  startedAt      DateTime @default(now())
+  endedAt        DateTime?
+  dataUpMb       Float    @default(0)
+  dataDownMb     Float    @default(0)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site         Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@map("wifi_sessions")
+}
+
+// ============================================================
+// PAYMENT — Snippe Collection records
+// ============================================================
+
+model Payment {
+  id               String        @id @default(cuid())
+  snippeReference  String        @unique // Snippe transaction reference
+  userId           String
+  resellerId       String
+  subscriptionId   String?       @unique
+  amount           Int           // Amount in smallest unit (TZS)
+  currency         String        @default("TZS")
+  status           PaymentStatus @default(PENDING)
+  paymentType      PaymentType   // mobile, card, session, qr
+  customerPhone    String?       // Phone used for payment
+  customerEmail    String?       // Email used for payment
+  idempotencyKey   String        @unique // Prevent duplicate payments
+  metadata         Json?         // Raw Snippe webhook data
+  completedAt      DateTime?
+
+  // Revenue split
+  platformFee      Int           @default(0) // Super Admin's cut
+  resellerAmount   Int           @default(0) // Reseller's earnings
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reseller     Reseller      @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([resellerId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ============================================================
+// PAYOUT — Snippe Disbursement to Resellers
+// ============================================================
+
+model Payout {
+  id               String        @id @default(cuid())
+  snippeReference  String        @unique // Snippe payout reference
+  resellerId       String
+  withdrawalId     String?       @unique // Links to withdrawal request
+  amount           Int           // Amount sent to reseller
+  fee              Int           @default(0) // Snippe payout fee
+  total            Int           // amount + fee (debited from platform)
+  channel          PayoutChannel // mobile or bank
+  recipientPhone   String?       // For mobile payouts
+  recipientAccount String?       // For bank payouts
+  recipientBank    String?       // Bank name/code
+  recipientName    String        // Reseller name
+  status           PayoutStatus  @default(PENDING)
+  narration        String?       // Payment description
+  idempotencyKey   String        @unique
+  metadata         Json?         // Raw Snippe webhook data
+  completedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller   Reseller    @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id])
+
+  @@index([resellerId])
+  @@index([status])
+  @@map("payouts")
+}
+
+// ============================================================
+// WITHDRAWAL — Reseller withdrawal requests
+// ============================================================
+
+model Withdrawal {
+  id         String           @id @default(cuid())
+  resellerId String
+  amount     Int              // Amount requested
+  currency   String           @default("TZS")
+  status     WithdrawalStatus @default(PENDING)
+  channel    PayoutChannel    // mobile or bank
+  recipientPhone   String?    // For mobile payouts
+  recipientAccount String?    // For bank payouts
+  recipientBank    String?    // Bank name/code
+  recipientName    String     // Account holder name
+  adminNote  String?
+  processedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  payout   Payout?  // Created when withdrawal is processed
+
+  @@index([resellerId])
+  @@index([status])
+  @@map("withdrawals")
+}
+
+// ============================================================
+// CAPTIVE PORTAL CONFIG — Per-reseller branding
+// ============================================================
+
+model CaptivePortalConfig {
+  id          String  @id @default(cuid())
+  resellerId  String  @unique
+  logo        String?
+  bgImage     String?
+  bgColor     String  @default("#ffffff")
+  primaryColor String @default("#0070f3")
+  accentColor String  @default("#00c853")
+  companyName String?
+  welcomeText String? @default("Welcome! Connect to WiFi")
+  termsUrl    String?
+  termsText   String? @db.Text
+  customCss   String? @db.Text
+  customHtml  String? @db.Text
+  template    String  @default("default") // template name: default, modern, minimal, dark
+  redirectUrl String? // URL to redirect after payment
+  showLogo    Boolean @default(true)
+  showSocial  Boolean @default(false)
+  socialLinks Json?   // { facebook: "", instagram: "", twitter: "" }
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@map("captive_portal_configs")
+}
+
+// ============================================================
+// VOUCHER — Manual voucher codes for WiFi access
+// ============================================================
+
+model Voucher {
+  id         String    @id @default(cuid())
+  resellerId String
+  code       String    @unique
+  packageId  String
+  isUsed     Boolean   @default(false)
+  usedById   String?   // user who redeemed
+  usedAt     DateTime?
+  expiresAt  DateTime? // voucher expiry (not subscription expiry)
+  note       String?
+
+  createdAt DateTime @default(now())
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  package  Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  usedBy   User?    @relation(fields: [usedById], references: [id])
+
+  @@index([resellerId])
+  @@index([code])
+  @@map("vouchers")
+}
+
+// ============================================================
+// BLOCKED MAC — MAC addresses blocked by reseller
+// ============================================================
+
+model BlockedMac {
+  id         String   @id @default(cuid())
+  resellerId String
+  mac        String
+  reason     String?
+  blockedAt  DateTime @default(now())
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@unique([resellerId, mac])
+  @@map("blocked_macs")
+}
+
+// ============================================================
+// SSID CONFIG — SSID management per site
+// ============================================================
+
+model SsidConfig {
+  id         String  @id @default(cuid())
+  resellerId String
+  siteId     String
+  ssidName   String
+  password   String? // null = open network (captive portal)
+  isHidden   Boolean @default(false)
+  isEnabled  Boolean @default(true)
+  band       String  @default("2.4GHz") // 2.4GHz, 5GHz, both
+  vlanId     Int?
+  omadaSsidId String? // Omada internal SSID ID
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  site     Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([resellerId])
+  @@map("ssid_configs")
+}
+
+// ============================================================
+// NOTIFICATION PREFERENCE — Per-reseller notification settings
+// ============================================================
+
+model NotificationPreference {
+  id         String  @id @default(cuid())
+  resellerId String  @unique
+  emailOnPayment     Boolean @default(true)
+  emailOnWithdrawal  Boolean @default(true)
+  emailOnNewClient   Boolean @default(false)
+  emailOnDeviceDown  Boolean @default(true)
+  smsOnPayment       Boolean @default(false)
+  smsOnWithdrawal    Boolean @default(true)
+  smsOnDeviceDown    Boolean @default(false)
+  emailAddress       String? // override email
+  smsPhone           String? // override phone
+
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// ============================================================
+// RADIUS — FreeRADIUS SQL-compatible tables
+// ============================================================
+
+// radcheck — User authentication attributes (password, MAC binding)
+// FreeRADIUS queries this to authenticate users
+model Radcheck {
+  id        Int      @id @default(autoincrement())
+  username  String   // MAC address or voucher code
+  attribute String   // e.g. "Cleartext-Password", "Auth-Type"
+  op        String   @default(":=") // := (assign), == (check), etc.
+  value     String   // password value or attribute value
+
+  @@index([username])
+  @@map("radcheck")
+}
+
+// radreply — Reply attributes sent back to NAS after authentication
+// Controls session timeout, bandwidth, data quota
+model Radreply {
+  id        Int      @id @default(autoincrement())
+  username  String
+  attribute String   // e.g. "Session-Timeout", "WISPr-Bandwidth-Max-Down"
+  op        String   @default(":=")
+  value     String
+
+  @@index([username])
+  @@map("radreply")
+}
+
+// radgroupcheck — Group-level check attributes
+model Radgroupcheck {
+  id        Int      @id @default(autoincrement())
+  groupname String
+  attribute String
+  op        String   @default(":=")
+  value     String
+
+  @@index([groupname])
+  @@map("radgroupcheck")
+}
+
+// radgroupreply — Group-level reply attributes (e.g. default bandwidth)
+model Radgroupreply {
+  id        Int      @id @default(autoincrement())
+  groupname String
+  attribute String
+  op        String   @default(":=")
+  value     String
+
+  @@index([groupname])
+  @@map("radgroupreply")
+}
+
+// radusergroup — Maps users to groups
+model Radusergroup {
+  id       Int    @id @default(autoincrement())
+  username String
+  groupname String
+  priority Int    @default(1)
+
+  @@index([username])
+  @@map("radusergroup")
+}
+
+// radacct — Accounting records (session tracking, data usage)
+// FreeRADIUS writes here when sessions start/stop/update
+model Radacct {
+  radacctid         BigInt    @id @default(autoincrement())
+  acctsessionid     String    @default("")
+  acctuniqueid      String    @unique @default("")
+  username          String    @default("")
+  realm             String    @default("")
+  nasipaddress      String    @default("")
+  nasportid         String?
+  nasporttype       String?
+  acctstarttime     DateTime?
+  acctupdatetime    DateTime?
+  acctstoptime      DateTime?
+  acctinterval      Int?
+  acctsessiontime   Int?      // total session time in seconds
+  acctauthentic     String?
+  connectinfo_start String?
+  connectinfo_stop  String?
+  acctinputoctets   BigInt    @default(0)  // bytes uploaded
+  acctoutputoctets  BigInt    @default(0)  // bytes downloaded
+  calledstationid   String    @default("") // AP MAC
+  callingstationid  String    @default("") // Client MAC
+  acctterminatecause String   @default("")
+  servicetype       String?
+  framedprotocol    String?
+  framedipaddress   String    @default("")
+  framedipv6address String    @default("")
+  framedipv6prefix  String    @default("")
+  framedinterfaceid String    @default("")
+  delegatedipv6prefix String  @default("")
+
+  @@index([username])
+  @@index([acctsessionid])
+  @@index([acctstarttime])
+  @@index([acctstoptime])
+  @@index([nasipaddress])
+  @@index([callingstationid])
+  @@map("radacct")
+}
+
+// radpostauth — Post-authentication log
+model Radpostauth {
+  id            Int       @id @default(autoincrement())
+  username      String    @default("")
+  pass          String    @default("")
+  reply         String    @default("")
+  authdate      DateTime  @default(now())
+  calledstationid  String @default("")
+  callingstationid String @default("")
+
+  @@index([username])
+  @@index([authdate])
+  @@map("radpostauth")
+}
+
+// ============================================================
+// RADIUS USER — Application-level mapping for RADIUS credentials
+// Links our system users/subscriptions to RADIUS authentication
+// ============================================================
+
+model RadiusUser {
+  id              String    @id @default(cuid())
+  resellerId      String
+  userId          String?   // linked end-user
+  subscriptionId  String?   // linked subscription
+  username        String    @unique // MAC or voucher code (matches radcheck.username)
+  password        String    // generated password
+  macAddress      String?   // client MAC for MAC-binding
+  isActive        Boolean   @default(true)
+  expiresAt       DateTime  // when WiFi access expires
+  sessionTimeout  Int       // seconds allowed online
+  dataLimitBytes  BigInt?   // optional data cap in bytes
+  bandwidthUp     Int?      // upload limit in bps
+  bandwidthDown   Int?      // download limit in bps
+  maxSessions     Int       @default(1) // simultaneous devices
+  authMethod      String    @default("MAC") // MAC | VOUCHER | USERNAME
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller     Reseller      @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  @@index([resellerId])
+  @@index([macAddress])
+  @@index([expiresAt])
+  @@map("radius_users")
+}
+
+// ============================================================
+// PORTAL SESSION — Captive portal flow tracking
+// Tracks from WiFi connection → payment → RADIUS auth
+// ============================================================
+
+model PortalSession {
+  id            String    @id @default(cuid())
+  resellerId    String
+  clientMac     String    // connecting device MAC
+  clientIp      String?
+  apMac         String?   // access point MAC
+  ssid          String?
+  nasId         String?   // NAS identifier from Omada
+  redirectUrl   String?   // original URL the client was trying to access
+  status        String    @default("PENDING") // PENDING → PAYING → AUTHORIZED → EXPIRED
+  packageId     String?   // selected package
+  paymentId     String?   // Snippe payment reference
+  radiusUserId  String?   // created RADIUS credentials
+  authorizedAt  DateTime?
+  expiresAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@index([clientMac])
+  @@index([resellerId])
+  @@index([status])
+  @@map("portal_sessions")
+}
+
+// ============================================================
+// AUDIT LOG — Track important actions
+// ============================================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // e.g. "reseller.created", "payment.success", "device.adopted"
+  entity    String?  // e.g. "Reseller", "Payment", "Device"
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// SYSTEM SETTINGS — Global platform configuration
+// ============================================================
+
+model SystemSetting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String @db.Text
+  type  String @default("string") // "string", "number", "boolean", "json"
+
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ============================================================
+// RESELLER PLAN — Pricing tiers SSDomada charges its resellers
+// ============================================================
+
+model ResellerPlan {
+  id          String               @id @default(cuid())
+  name        String               @unique // e.g. "Starter", "Growth", "Enterprise"
+  slug        String               @unique
+  description String?
+  price       Int                  // TZS for the given interval
+  currency    String               @default("TZS")
+  interval    ResellerPlanInterval @default(MONTHLY)
+  trialDays   Int                  @default(0)
+
+  // Feature limits (null = unlimited)
+  maxSites          Int?
+  maxDevices        Int?
+  maxActiveClients  Int?
+  maxStaff          Int?
+  customBranding    Boolean @default(false)
+  customDomain      Boolean @default(false)
+  smsNotifications  Boolean @default(false)
+  prioritySupport   Boolean @default(false)
+  apiAccess         Boolean @default(false)
+
+  isActive    Boolean @default(true)
+  isFeatured  Boolean @default(false)
+  sortOrder   Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions ResellerPlanSubscription[]
+
+  @@map("reseller_plans")
+}
+
+// ============================================================
+// RESELLER PLAN SUBSCRIPTION — Active subscription per reseller
+// ============================================================
+
+model ResellerPlanSubscription {
+  id              String             @id @default(cuid())
+  resellerId      String             @unique
+  planId          String
+  status          ResellerPlanStatus @default(TRIAL)
+  startedAt       DateTime           @default(now())
+  currentPeriodEnd DateTime
+  trialEndsAt     DateTime?
+  cancelledAt     DateTime?
+  cancelAtPeriodEnd Boolean          @default(false)
+
+  // Last billing payment reference (Snippe)
+  lastPaymentRef  String?
+  lastPaymentAt   DateTime?
+
+  // Cached limits snapshot (so admin can change a plan without retroactively breaking)
+  snapshotJson    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reseller Reseller     @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  plan     ResellerPlan @relation(fields: [planId], references: [id])
+
+  @@index([status])
+  @@index([currentPeriodEnd])
+  @@map("reseller_plan_subscriptions")
+}

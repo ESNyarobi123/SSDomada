@@ -1,0 +1,30 @@
+---
+description: Ship checklist — build, Docker, and Prisma migrations for SSDomada
+alwaysApply: true
+---
+
+# SSDomada — ship checklist
+
+When finishing a change set that touches application code, schema, or infrastructure, follow this order unless the user explicitly opts out.
+
+## 1. Next.js build
+
+- Run `npm run build` from the repo root and fix TypeScript / lint failures before considering the task done.
+
+## 2. Database migrations (Prisma)
+
+- If you change **`prisma/schema.prisma`** or otherwise alter the database shape, you **must** create a migration (do not rely on `db push` alone for production).
+- **Local / dev (creates migration files under `prisma/migrations/`):**
+  - `npx prisma migrate dev --name <short_description>`
+- **Production / Docker:** the image entrypoint runs `prisma migrate deploy` (see `docker-entrypoint.sh`). New migration SQL must be committed so deploy applies it.
+
+## 3. Docker image
+
+- After meaningful changes (especially before release or when the user asks for container verification), validate the production image:
+  - `docker build -f Dockerfile -t ssdomada:local .`
+- Resolve any Docker build failures (Prisma generate, `npm run build` inside the image, missing files, etc.).
+
+## 4. Scope
+
+- Do not run destructive DB commands (`migrate reset`, dropping data) unless the user clearly requests it.
+- If there is no schema change, skip migration steps but still run **`npm run build`** when the change affects compiled code.
