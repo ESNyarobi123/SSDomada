@@ -55,23 +55,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
-
-# Modules needed by prisma/seed.ts (not included in Next.js standalone output)
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/bcryptjs ./node_modules/bcryptjs
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/tsx ./node_modules/tsx
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/esbuild ./node_modules/esbuild
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/get-tsconfig ./node_modules/get-tsconfig
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
 
-# package.json — prisma db seed reads prisma.seed
+# Copy package.json so `prisma db seed` can locate the seed script config
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 
-# Local .bin + global prisma for `docker compose exec app prisma …`
-ENV PATH="/app/node_modules/.bin:/usr/local/bin:${PATH}"
-
+# Modules + CLIs needed by prisma seed (not included in Next.js standalone output).
+# `tsx` is not a project dependency, so install it instead of copying missing folders.
 USER root
-RUN npm install -g prisma@5.22.0
+RUN npm install -g prisma@5.22.0 tsx@4
+ENV PATH="/app/node_modules/.bin:/usr/local/bin:${PATH}"
 
 # Copy entrypoint script
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
