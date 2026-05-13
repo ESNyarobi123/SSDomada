@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 
+/** Defaults when opening adopt modal (AP web UI login); user may clear both to use server OMADA_DEVICE_* . */
+const DEFAULT_DEVICE_ADOPT_USERNAME = "admin";
+const DEFAULT_DEVICE_ADOPT_PASSWORD = "Admin@12345678";
+
 type Site = { id: string; name: string };
 type DeviceDetail = {
   id: string;
@@ -229,8 +233,8 @@ export default function ResellerDeviceDetailPage() {
               disabled={!!busy}
               onClick={() => {
                 setErr(null);
-                setAdoptUser("");
-                setAdoptPass("");
+                setAdoptUser(DEFAULT_DEVICE_ADOPT_USERNAME);
+                setAdoptPass(DEFAULT_DEVICE_ADOPT_PASSWORD);
                 setAdoptOpen(true);
               }}
               className="inline-flex items-center gap-2 rounded-xl border border-sky-500/40 px-3 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
@@ -464,7 +468,9 @@ export default function ResellerDeviceDetailPage() {
             <h2 className="text-lg font-bold text-white pr-8">Adopt on Omada</h2>
             <p className="text-xs text-onyx-400 mt-2 mb-4">
               If Omada asks for the AP’s current login (because tplinkeap.net credentials were changed), enter them here.
-              Leave both empty to use the platform default device account (server <span className="font-mono text-onyx-300">OMADA_DEVICE_*</span>).
+              Fields open with <span className="font-mono text-onyx-300">admin</span> /{" "}
+              <span className="font-mono text-onyx-300">Admin@12345678</span> — edit or clear both to use the platform default (
+              <span className="font-mono text-onyx-300">OMADA_DEVICE_*</span> on the server).
             </p>
             <div className="space-y-3">
               <div>
