@@ -5,6 +5,7 @@ import { createSiteSchema } from "@/lib/validations/reseller";
 import { OmadaService } from "@/server/services/omada.service";
 import { ensureActiveResellerPlan, ensureCapacity } from "@/server/middleware/paywall";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
+import { getResellerOmadaPortalName } from "@/server/lib/reseller-portal-display-name";
 
 /**
  * GET /api/v1/reseller/sites
@@ -71,12 +72,7 @@ export async function POST(req: NextRequest) {
         const base = getPortalPublicBaseUrl();
         const portalUrl = base ? `${base}/portal/${reseller.brandSlug}` : "";
         if (portalUrl.startsWith("http")) {
-          const sub = await prisma.resellerPlanSubscription.findUnique({
-            where: { resellerId: ctx.resellerId },
-            include: { plan: { select: { name: true } } },
-          });
-          const planName = sub?.plan?.name?.trim();
-          const portalName = planName ? `${planName} · ${reseller.companyName}` : `${reseller.companyName} Portal`;
+          const portalName = await getResellerOmadaPortalName(ctx.resellerId, reseller.companyName);
 
           await OmadaService.setExternalPortal(omadaSiteId, {
             name: portalName,

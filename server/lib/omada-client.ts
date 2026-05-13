@@ -125,6 +125,13 @@ export class OmadaClient {
   }
 
   /**
+   * PUT shorthand
+   */
+  static async put<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    return this.request<T>("PUT", path, body);
+  }
+
+  /**
    * DELETE shorthand
    */
   static async delete<T>(path: string): Promise<T> {

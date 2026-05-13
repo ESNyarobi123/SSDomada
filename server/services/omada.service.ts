@@ -1030,4 +1030,130 @@ export class OmadaService {
       return false;
     }
   }
+
+  private static normalizeExternalPortalUrl(u: string): string {
+    return u.trim().replace(/\/+$/, "").toLowerCase();
+  }
+
+  private static extractPortalRows(res: unknown): Record<string, unknown>[] {
+    if (!res || typeof res !== "object") return [];
+    const o = res as { errorCode?: number; result?: unknown };
+    if (o.errorCode !== undefined && o.errorCode !== 0) return [];
+    const result = o.result;
+    if (Array.isArray(result)) return result as Record<string, unknown>[];
+    if (result && typeof result === "object") {
+      const r = result as Record<string, unknown>;
+      if (Array.isArray(r.data)) return r.data as Record<string, unknown>[];
+      if (Array.isArray(r.list)) return r.list as Record<string, unknown>[];
+    }
+    return [];
+  }
+
+  /** List portal profiles configured on an Omada site (Open API shape varies by controller version). */
+  static async listSitePortals(omadaSiteId: string): Promise<Record<string, unknown>[]> {
+    for (const ver of ["v1", "v2"] as const) {
+      try {
+        const path = `/openapi/${ver}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals`;
+        const res = await OmadaClient.get<unknown>(path);
+        const rows = OmadaService.extractPortalRows(res);
+        if (rows.length > 0) return rows;
+      } catch {
+        /* try next */
+      }
+    }
+    return [];
+  }
+
+  private static pickPortalRowId(row: Record<string, unknown>): string | null {
+    const v = row.portalId ?? row.id;
+    return typeof v === "string" && v.length > 0 ? v : null;
+  }
+
+  private static pickPortalExternalUrl(row: Record<string, unknown>): string {
+    const u = row.externalUrl ?? row.externalPortalUrl;
+    return typeof u === "string" ? u : "";
+  }
+
+  private static pickPortalSsids(row: Record<string, unknown>): string[] {
+    const s = row.ssids ?? row.ssidIds;
+    if (!Array.isArray(s)) return [];
+    const out: string[] = [];
+    for (const item of s) {
+      if (typeof item === "string") out.push(item);
+      else if (item && typeof item === "object" && typeof (item as { id?: string }).id === "string") {
+        out.push((item as { id: string }).id);
+      }
+    }
+    return out.filter(Boolean);
+  }
+
+  /**
+   * Attach Omada WLAN SSIDs (open / portal) to the site's external portal and keep portal URL/name in sync.
+   * Pre-authentication allowlist is not exposed reliably via Open API — configure in Omada UI (see docs/captive-preauth-allowlist.md).
+   */
+  static async syncExternalPortalWithOpenSsids(
+    omadaSiteId: string,
+    opts: { portalUrl: string; portalName: string; omadaSsidIds: string[] }
+  ): Promise<{ ok: boolean; method?: "patch" | "post" | "skipped"; message?: string }> {
+    const ids = [...new Set(opts.omadaSsidIds.filter(Boolean))];
+    if (ids.length === 0) {
+      return { ok: false, method: "skipped", message: "No Omada SSID ids to attach" };
+    }
+    const target = OmadaService.normalizeExternalPortalUrl(opts.portalUrl);
+
+    try {
+      const rows = await OmadaService.listSitePortals(omadaSiteId);
+      let match = rows.find((r) => {
+        const u = OmadaService.normalizeExternalPortalUrl(OmadaService.pickPortalExternalUrl(r));
+        return u.length > 0 && u === target;
+      });
+      if (!match && rows.length === 1) {
+        match = rows[0];
+      }
+
+      const portalId = match ? OmadaService.pickPortalRowId(match) : null;
+      const existing = match ? OmadaService.pickPortalSsids(match) : [];
+      const merged = [...new Set([...existing, ...ids])];
+
+      if (portalId) {
+        const patchBodies: Record<string, unknown>[] = [
+          { ssids: merged },
+          {
+            name: opts.portalName,
+            externalUrl: opts.portalUrl,
+            authType: "externalRadius",
+            portalType: "external",
+            httpsRedirection: true,
+            authenticationTimeout: 480,
+            ssids: merged,
+          },
+        ];
+        for (const ver of ["v1", "v2"] as const) {
+          const basePath = `/openapi/${ver}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals/${portalId}`;
+          for (const body of patchBodies) {
+            try {
+              const res = await OmadaClient.patch<{ errorCode?: number; msg?: string }>(basePath, body);
+              if (res?.errorCode === 0) return { ok: true, method: "patch" };
+            } catch {
+              /* try next */
+            }
+          }
+        }
+        console.warn("[OmadaService] syncExternalPortalWithOpenSsids: PATCH failed; portal id=", portalId);
+        return { ok: false, method: "skipped", message: "Found portal but PATCH ssids failed (check controller API version)." };
+      }
+
+      const posted = await OmadaService.setExternalPortal(omadaSiteId, {
+        name: opts.portalName,
+        portalUrl: opts.portalUrl,
+        ssidIds: merged,
+      });
+      return posted
+        ? { ok: true, method: "post" }
+        : { ok: false, method: "post", message: "POST portals failed (no existing portal row to PATCH)." };
+    } catch (err) {
+      console.error("[OmadaService] syncExternalPortalWithOpenSsids failed:", err);
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
 }

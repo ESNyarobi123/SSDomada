@@ -54,3 +54,7 @@ SSDomada does **not** push this list to Omada via Open API today (TP-Link’s pu
 You can keep a **private note** in your deployment runbook (or a non-secret comment block) listing the exact hostnames you entered in Omada. A long comma-separated secret in `.env` is **not** required for the portal to work unless you later add automation that reads it.
 
 If we add Omada Open API support for pre-auth in the future, a single variable such as `OMADA_PREAUTH_HOSTS` (comma-separated) could drive that — today it is **documentation + manual UI**.
+
+## SSDomada: push portal URL + SSIDs (Open API)
+
+After deploy, call **`POST /api/v1/reseller/omada/sync-portal`** (Bearer session token) to re-attach every **open** SSID that has an `omadaSsidId` to the site’s external portal on Omada. Optional JSON body: `{ "siteId": "<site cuid>" }` to limit to one site. Pre-authentication allowlist is still **manual** in Omada (see above).

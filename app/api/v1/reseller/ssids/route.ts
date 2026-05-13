@@ -3,6 +3,8 @@ import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { createSsidSchema } from "@/lib/validations/reseller";
 import { OmadaService } from "@/server/services/omada.service";
+import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
+import { getResellerOmadaPortalName } from "@/server/lib/reseller-portal-display-name";
 
 /**
  * GET /api/v1/reseller/ssids
@@ -85,6 +87,19 @@ export async function POST(req: NextRequest) {
       },
       include: { site: { select: { name: true } } },
     });
+
+    if (site.omadaSiteId && omadaSsidId && !validated.password) {
+      const base = getPortalPublicBaseUrl();
+      const portalUrl = base ? `${base}/portal/${ctx.brandSlug}` : "";
+      if (portalUrl.startsWith("http")) {
+        const portalName = await getResellerOmadaPortalName(ctx.resellerId, ctx.companyName);
+        await OmadaService.syncExternalPortalWithOpenSsids(site.omadaSiteId, {
+          portalUrl,
+          portalName,
+          omadaSsidIds: [omadaSsidId],
+        });
+      }
+    }
 
     await logResellerAction(ctx.userId, "ssid.created", "SsidConfig", ssid.id, {
       ssidName: validated.ssidName,
