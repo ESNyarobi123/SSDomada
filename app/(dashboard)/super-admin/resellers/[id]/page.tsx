@@ -1017,7 +1017,13 @@ export default function AdminResellerDetailPage() {
         <div className="max-w-xl">
           {!d.planSubscription ? (
             <div className="rounded-2xl border border-white/10 bg-onyx-900/40 p-6 text-onyx-400">
-              This reseller has no SSDomada platform subscription record yet.
+              <p>This reseller has no SSDomada platform subscription record yet.</p>
+              <p className="mt-3 text-xs">
+                <Link href="/super-admin/platform-plans" className="text-gold font-semibold hover:underline">
+                  Manage platform plans catalog
+                </Link>{" "}
+                — then assign a plan from the list above once a subscription row exists.
+              </p>
             </div>
           ) : (
             <form onSubmit={savePlatformPlan} className="rounded-2xl border border-white/10 bg-onyx-900/40 p-6 space-y-4">
@@ -1025,6 +1031,11 @@ export default function AdminResellerDetailPage() {
                 <Shield className="h-5 w-5 text-gold" />
                 Platform billing
               </h2>
+              <p className="text-xs text-onyx-500">
+                <Link href="/super-admin/platform-plans" className="text-gold font-semibold hover:underline">
+                  Edit plan catalog (pricing & limits)
+                </Link>
+              </p>
               <label className="block text-sm space-y-1">
                 <span className="text-onyx-400">Plan</span>
                 <select

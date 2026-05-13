@@ -22,6 +22,7 @@ import {
   PanelLeftOpen,
   Menu,
   X,
+  Layers,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { fetchSession, redirectAfterAuth, setStoredToken } from "@/lib/auth-client";
@@ -34,6 +35,7 @@ const sections: { title: string; items: NavItem[] }[] = [
     title: "Business",
     items: [
       { href: "/super-admin/resellers", label: "Resellers", icon: Store },
+      { href: "/super-admin/platform-plans", label: "Reseller plans", icon: Layers },
       { href: "/super-admin/customers", label: "Customers", icon: Users },
       { href: "/super-admin/subscriptions", label: "Subscriptions", icon: Package },
       { href: "/super-admin/payments", label: "Payments", icon: CreditCard },

@@ -134,6 +134,33 @@ export const adminCreateWifiSubscriptionSchema = z.object({
 // Reseller platform plan (SSDomada billing)
 // ============================================================
 
+export const resellerPlanIntervalSchema = z.enum(["MONTHLY", "YEARLY", "LIFETIME"]);
+
+/** SSDomada tier a reseller can subscribe to (public /pricing + billing). */
+export const createResellerPlanSchema = z.object({
+  name: z.string().min(2).max(80),
+  slug: z.string().min(2).max(60).regex(/^[a-z0-9-]+$/),
+  description: z.string().max(500).optional().nullable(),
+  price: z.number().int().min(0),
+  currency: z.string().min(3).max(8).default("TZS"),
+  interval: resellerPlanIntervalSchema.default("MONTHLY"),
+  trialDays: z.number().int().min(0).max(730).default(0),
+  maxSites: z.number().int().min(1).nullable().optional(),
+  maxDevices: z.number().int().min(1).nullable().optional(),
+  maxActiveClients: z.number().int().min(1).nullable().optional(),
+  maxStaff: z.number().int().min(1).nullable().optional(),
+  customBranding: z.boolean().default(false),
+  customDomain: z.boolean().default(false),
+  smsNotifications: z.boolean().default(false),
+  prioritySupport: z.boolean().default(false),
+  apiAccess: z.boolean().default(false),
+  isActive: z.boolean().default(true),
+  isFeatured: z.boolean().default(false),
+  sortOrder: z.number().int().default(0),
+});
+
+export const updateResellerPlanSchema = createResellerPlanSchema.partial();
+
 export const adminUpdateResellerPlatformPlanSchema = z.object({
   planId: z.string().cuid().optional(),
   status: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "EXPIRED", "CANCELLED"]).optional(),
