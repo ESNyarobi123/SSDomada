@@ -20,10 +20,13 @@ import {
   SlidersHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  ShieldAlert,
+  Megaphone,
+  XCircle,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useState } from "react";
 import Image from "next/image";
-import { setStoredToken, fetchSession, redirectAfterAuth } from "@/lib/auth-client";
+import { setStoredToken, fetchSession, redirectAfterAuth, authFetch } from "@/lib/auth-client";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -68,6 +71,12 @@ function navActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+const IMPERSONATION_ACTIVE_KEY = "ssdomada_impersonation_active";
+const IMPERSONATION_BACKUP_TOKEN_KEY = "ssdomada_impersonation_backup_token";
+const IMPERSONATION_RETURN_PATH_KEY = "ssdomada_impersonation_return_path";
+
+type DashboardNotice = { id: string; title: string | null; body: string; createdAt: string };
+
 const SIDEBAR_COLLAPSED_KEY = "reseller_sidebar_collapsed";
 
 export default function ResellerLayout({ children }: { children: React.ReactNode }) {
@@ -75,6 +84,8 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [impersonationBar, setImpersonationBar] = useState(false);
+  const [notices, setNotices] = useState<DashboardNotice[]>([]);
 
   useLayoutEffect(() => {
     try {
@@ -83,6 +94,53 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      setImpersonationBar(sessionStorage.getItem(IMPERSONATION_ACTIVE_KEY) === "1");
+    } catch {
+      /* ignore */
+    }
+  }, [pathname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await authFetch("/api/v1/reseller/notices");
+      const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: DashboardNotice[] };
+      if (cancelled || !json.success || !json.data?.length) return;
+      setNotices(json.data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
+  function exitImpersonation() {
+    try {
+      const backup = sessionStorage.getItem(IMPERSONATION_BACKUP_TOKEN_KEY);
+      const returnPath = sessionStorage.getItem(IMPERSONATION_RETURN_PATH_KEY) || "/super-admin/resellers";
+      if (backup) setStoredToken(backup);
+      sessionStorage.removeItem(IMPERSONATION_ACTIVE_KEY);
+      sessionStorage.removeItem(IMPERSONATION_BACKUP_TOKEN_KEY);
+      sessionStorage.removeItem(IMPERSONATION_RETURN_PATH_KEY);
+      router.replace(returnPath);
+    } catch {
+      router.replace("/super-admin/resellers");
+    }
+  }
+
+  async function dismissNotice(noticeId: string) {
+    const res = await authFetch(`/api/v1/reseller/notices/${noticeId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "dismiss" }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.success) {
+      setNotices((prev) => prev.filter((n) => n.id !== noticeId));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +320,51 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
                 Sign out
               </button>
             </div>
+          </div>
+        )}
+        {impersonationBar && (
+          <div className="shrink-0 border-b border-amber-500/35 bg-amber-500/15 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2 text-sm text-amber-100 min-w-0">
+              <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-300" />
+              <span className="leading-snug">
+                You are signed in with this reseller&apos;s session for support. Use <strong className="text-white">Return to admin</strong> to restore your
+                super-admin session.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => exitImpersonation()}
+              className="shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/20 border border-white/15"
+            >
+              Return to admin
+            </button>
+          </div>
+        )}
+        {notices.length > 0 && (
+          <div className="shrink-0 space-y-2 border-b border-gold-20/30 bg-gold-5/10 px-3 py-3">
+            {notices.map((n) => (
+              <div
+                key={n.id}
+                className="flex gap-3 rounded-xl border border-gold-20/40 bg-onyx-950/60 p-3 text-sm text-onyx-200"
+              >
+                <Megaphone className="w-4 h-4 shrink-0 text-gold mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  {n.title ? <div className="font-bold text-gold mb-0.5">{n.title}</div> : null}
+                  <p className="whitespace-pre-wrap text-onyx-200 leading-relaxed">{n.body}</p>
+                  <div className="mt-1 text-[10px] text-onyx-500 uppercase tracking-wider">
+                    From SSDomada admin · {new Date(n.createdAt).toLocaleString()}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void dismissNotice(n.id)}
+                  className="shrink-0 self-start rounded-lg p-1.5 text-onyx-400 hover:bg-white/10 hover:text-white"
+                  aria-label="Dismiss notice"
+                >
+                  <XCircle className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
         <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8 custom-scrollbar page-enter">{children}</main>

@@ -41,6 +41,13 @@ export const updateResellerSchema = z.object({
   description: z.string().max(500).optional(),
 });
 
+/** Super-admin may update the reseller login profile alongside company fields. */
+export const adminUpdateResellerUserSchema = z.object({
+  name: z.string().min(2).max(100).optional(),
+  email: z.string().email().optional(),
+  phone: z.string().max(30).optional().nullable(),
+});
+
 // ============================================================
 // Packages / Subscriptions
 // ============================================================
@@ -92,6 +99,8 @@ export const updateSettingSchema = z.object({
 export const updateDeviceSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   type: z.enum(["AP", "SWITCH", "GATEWAY", "OTHER"]).optional(),
+  /** Super-admin override (e.g. mark as OFFLINE to reflect suspension in dashboard). */
+  status: z.enum(["ONLINE", "OFFLINE", "PENDING"]).optional(),
 });
 
 // ============================================================
@@ -102,4 +111,28 @@ export const customerFilterSchema = z.object({
   search: z.string().optional(), // phone, email, or MAC
   resellerId: z.string().cuid().optional(),
   isActive: z.coerce.boolean().optional(),
+});
+
+// ============================================================
+// End-user WiFi subscription (admin)
+// ============================================================
+
+export const adminUpdateWifiSubscriptionSchema = z.object({
+  status: z.enum(["ACTIVE", "EXPIRED", "CANCELLED", "SUSPENDED"]).optional(),
+  expiresAt: z.string().datetime().optional(),
+});
+
+// ============================================================
+// Reseller platform plan (SSDomada billing)
+// ============================================================
+
+export const adminUpdateResellerPlatformPlanSchema = z.object({
+  planId: z.string().cuid().optional(),
+  status: z.enum(["TRIAL", "ACTIVE", "PAST_DUE", "EXPIRED", "CANCELLED"]).optional(),
+  currentPeriodEnd: z.string().datetime().optional(),
+});
+
+export const adminCreateResellerNoticeSchema = z.object({
+  title: z.string().max(160).optional(),
+  body: z.string().min(1).max(8000),
 });

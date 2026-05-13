@@ -224,8 +224,28 @@ model Reseller {
   radiusUsers        RadiusUser[]
   portalSessions     PortalSession[]
   planSubscription   ResellerPlanSubscription?
+  dashboardNotices   ResellerDashboardNotice[]
 
   @@map("resellers")
+}
+
+// ============================================================
+// RESELLER DASHBOARD NOTICE — In-app messages from super-admins
+// ============================================================
+
+model ResellerDashboardNotice {
+  id           String    @id @default(cuid())
+  resellerId   String
+  title        String?
+  body         String    @db.Text
+  createdById  String
+  dismissedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@index([resellerId, dismissedAt])
+  @@map("reseller_dashboard_notices")
 }
 
 // ============================================================

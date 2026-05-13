@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyAdmin, apiSuccess, apiError, logAdminAction, getClientIp } from "@/server/middleware/admin-auth";
-import { updateResellerSchema } from "@/lib/validations/admin";
+import {
+  updateResellerSchema,
+  adminUpdateResellerUserSchema,
+} from "@/lib/validations/admin";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -25,6 +28,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         sites: { orderBy: { createdAt: "desc" } },
         captivePortalConfig: true,
         packages: { orderBy: { sortOrder: "asc" } },
+        planSubscription: { include: { plan: true } },
         _count: { select: { devices: true, payments: true, withdrawals: true } },
       },
     });
@@ -142,16 +146,60 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       return apiSuccess({ id, status: "active", message: "Reseller activated successfully" });
     }
 
-    // Regular update
-    const validated = updateResellerSchema.parse(body);
+    const { user: userPatch, action: _ignored, ...resellerBody } = body as Record<string, unknown> & {
+      user?: unknown;
+      action?: string;
+    };
 
-    const updated = await prisma.reseller.update({
+    const reseller = await prisma.reseller.findUnique({
       where: { id },
-      data: validated,
-      include: { user: { select: { name: true, email: true } } },
+      select: { userId: true },
     });
+    if (!reseller) return apiError("Reseller not found", 404, "NOT_FOUND");
 
-    await logAdminAction(admin.userId, "reseller.updated", "Reseller", id, validated, getClientIp(req));
+    if (userPatch !== undefined && userPatch !== null) {
+      const u = adminUpdateResellerUserSchema.parse(userPatch);
+      if (Object.keys(u).length > 0) {
+        if (u.email) {
+          const email = u.email.toLowerCase().trim();
+          const taken = await prisma.user.findFirst({
+            where: { email, NOT: { id: reseller.userId } },
+          });
+          if (taken) return apiError("Email already in use", 409, "EMAIL_EXISTS");
+          await prisma.user.update({
+            where: { id: reseller.userId },
+            data: {
+              ...(u.name !== undefined ? { name: u.name } : {}),
+              ...(u.phone !== undefined ? { phone: u.phone } : {}),
+              email,
+            },
+          });
+        } else {
+          await prisma.user.update({
+            where: { id: reseller.userId },
+            data: u,
+          });
+        }
+        await logAdminAction(admin.userId, "reseller.user_updated", "User", reseller.userId, u, getClientIp(req));
+      }
+    }
+
+    const resellerKeys = Object.keys(resellerBody).filter((k) => resellerBody[k as keyof typeof resellerBody] !== undefined);
+    if (resellerKeys.length > 0) {
+      const validated = updateResellerSchema.parse(resellerBody);
+      await prisma.reseller.update({
+        where: { id },
+        data: validated,
+      });
+      await logAdminAction(admin.userId, "reseller.updated", "Reseller", id, validated, getClientIp(req));
+    }
+
+    const updated = await prisma.reseller.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, isActive: true, createdAt: true } },
+      },
+    });
 
     return apiSuccess(updated);
   } catch (error: any) {
