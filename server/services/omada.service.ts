@@ -320,21 +320,22 @@ export class OmadaService {
    * Adopt a device into a site on Omada Controller.
    * The device must already be connected to the network and visible to the controller.
    * On failure, `message` / `errorCode` come from Omada (or the HTTP client) so operators can debug.
+   *
+   * If v1 returns 404/Not Found, optionally retries `/openapi/v2/.../adopt` (some deployments differ).
+   * Set `OMADA_ADOPT_TRY_V2=true` to always try v2 after v1 failure.
    */
   static async adoptDevice(omadaSiteId: string, deviceMac: string): Promise<{
     adopted: boolean;
     message?: string;
     errorCode?: number;
   }> {
-    try {
-      const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
-      const res = await OmadaClient.post<{ errorCode?: number; msg?: string }>(
-        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`,
-        {}
-      );
-      if (res.errorCode === 0) return { adopted: true };
+    const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
+
+    const parseResult = (res: Record<string, unknown>): { adopted: boolean; message?: string; errorCode?: number } => {
       const ec = res.errorCode;
-      const msg = res.msg?.trim();
+      if (ec === 0) return { adopted: true };
+      const msg = typeof res.msg === "string" ? res.msg.trim() : "";
+      const blob = JSON.stringify(res);
       return {
         adopted: false,
         errorCode: typeof ec === "number" ? ec : undefined,
@@ -342,8 +343,42 @@ export class OmadaService {
           msg ||
           (typeof ec === "number"
             ? `Omada returned errorCode ${ec}`
-            : `Omada adopt did not succeed (response: ${JSON.stringify(res).slice(0, 240)})`),
+            : `Omada adopt did not succeed (${blob.slice(0, 280)})`),
       };
+    };
+
+    const shouldTryV2 = (message?: string) =>
+      process.env.OMADA_ADOPT_TRY_V2 === "true" || (!!message && /404|Not Found|"status":\s*404/i.test(message));
+
+    const v1Path = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`;
+    const v2Path = `/openapi/v2/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`;
+
+    try {
+      const res = (await OmadaClient.post<Record<string, unknown>>(v1Path, {})) as Record<string, unknown>;
+      const first = parseResult(res);
+      if (first.adopted) return first;
+
+      if (shouldTryV2(first.message)) {
+        try {
+          const res2 = (await OmadaClient.post<Record<string, unknown>>(v2Path, {})) as Record<string, unknown>;
+          const second = parseResult(res2);
+          if (second.adopted) return second;
+          return {
+            adopted: false,
+            message: `v1: ${first.message || "failed"} · v2: ${second.message || "failed"}`,
+            errorCode: second.errorCode ?? first.errorCode,
+          };
+        } catch (e2) {
+          const m2 = e2 instanceof Error ? e2.message : String(e2);
+          return {
+            adopted: false,
+            message: `v1: ${first.message || "failed"} · v2 request error: ${m2}`,
+            errorCode: first.errorCode,
+          };
+        }
+      }
+
+      return first;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] adoptDevice failed:", err);
