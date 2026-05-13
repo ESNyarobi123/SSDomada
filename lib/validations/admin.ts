@@ -122,6 +122,14 @@ export const adminUpdateWifiSubscriptionSchema = z.object({
   expiresAt: z.string().datetime().optional(),
 });
 
+/** Super-admin creates an end-user WiFi subscription (e.g. comp / support). */
+export const adminCreateWifiSubscriptionSchema = z.object({
+  packageId: z.string().cuid(),
+  userId: z.string().cuid(),
+  status: z.enum(["ACTIVE", "EXPIRED", "CANCELLED", "SUSPENDED"]).default("ACTIVE"),
+  expiresAt: z.string().datetime().optional(),
+});
+
 // ============================================================
 // Reseller platform plan (SSDomada billing)
 // ============================================================

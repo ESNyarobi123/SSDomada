@@ -24,10 +24,46 @@ export async function GET(req: NextRequest) {
     const resellerId = searchParams.get("resellerId") || undefined;
     const status = searchParams.get("status") || undefined;
 
+    if (view === "summary") {
+      const [totalPackages, activePackages, totalSubscriptions, statusRows] = await Promise.all([
+        prisma.package.count(),
+        prisma.package.count({ where: { isActive: true } }),
+        prisma.subscription.count(),
+        prisma.subscription.groupBy({
+          by: ["status"],
+          _count: true,
+        }),
+      ]);
+      const subscriptionsByStatus = statusRows.reduce(
+        (acc: Record<string, number>, row) => {
+          acc[row.status] = row._count;
+          return acc;
+        },
+        {} as Record<string, number>
+      );
+      return apiSuccess({
+        totalPackages,
+        activePackages,
+        totalSubscriptions,
+        subscriptionsByStatus,
+      });
+    }
+
     if (view === "subscriptions") {
-      const where: any = {};
-      if (status) where.status = status;
-      if (resellerId) where.package = { resellerId };
+      const clauses: object[] = [];
+      if (resellerId) clauses.push({ package: { resellerId } });
+      if (status) clauses.push({ status });
+      const search = searchParams.get("search")?.trim();
+      if (search) {
+        clauses.push({
+          OR: [
+            { user: { phone: { contains: search } } },
+            { user: { email: { contains: search, mode: "insensitive" } } },
+            { user: { name: { contains: search, mode: "insensitive" } } },
+          ],
+        });
+      }
+      const where = clauses.length > 0 ? { AND: clauses } : {};
 
       const [subscriptions, total, statusCounts] = await Promise.all([
         prisma.subscription.findMany({
@@ -35,7 +71,13 @@ export async function GET(req: NextRequest) {
           skip: (page - 1) * limit,
           take: limit,
           orderBy: { createdAt: "desc" },
-          include: {
+          select: {
+            id: true,
+            status: true,
+            startedAt: true,
+            expiresAt: true,
+            createdAt: true,
+            updatedAt: true,
             user: { select: { id: true, name: true, email: true, phone: true } },
             package: {
               select: {
@@ -51,6 +93,7 @@ export async function GET(req: NextRequest) {
         prisma.subscription.count({ where }),
         prisma.subscription.groupBy({
           by: ["status"],
+          where,
           _count: true,
         }),
       ]);
@@ -72,6 +115,15 @@ export async function GET(req: NextRequest) {
     if (resellerId) where.resellerId = resellerId;
     if (status === "active") where.isActive = true;
     else if (status === "inactive") where.isActive = false;
+    const pkgSearch = searchParams.get("search")?.trim();
+    if (pkgSearch) {
+      where.OR = [
+        { name: { contains: pkgSearch, mode: "insensitive" } },
+        { description: { contains: pkgSearch, mode: "insensitive" } },
+        { reseller: { companyName: { contains: pkgSearch, mode: "insensitive" } } },
+        { reseller: { brandSlug: { contains: pkgSearch, mode: "insensitive" } } },
+      ];
+    }
 
     const [packages, total] = await Promise.all([
       prisma.package.findMany({

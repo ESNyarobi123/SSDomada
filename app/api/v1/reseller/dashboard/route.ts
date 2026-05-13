@@ -39,6 +39,9 @@ export async function GET(req: NextRequest) {
       recentPayments,
       // Top packages
       topPackages,
+      packagesSummary,
+      subscriptionStats,
+      recentSubscriptions,
     ] = await Promise.all([
       prisma.payment.aggregate({
         where: { resellerId: ctx.resellerId, status: "COMPLETED", completedAt: { gte: todayStart } },
@@ -100,6 +103,41 @@ export async function GET(req: NextRequest) {
         orderBy: { _sum: { amount: "desc" } },
         take: 5,
       }),
+      Promise.all([
+        prisma.package.count({ where: { resellerId: ctx.resellerId } }),
+        prisma.package.count({ where: { resellerId: ctx.resellerId, isActive: true } }),
+      ]),
+      Promise.all([
+        prisma.subscription.count({
+          where: {
+            package: { resellerId: ctx.resellerId },
+            status: "ACTIVE",
+            expiresAt: { gt: now },
+          },
+        }),
+        prisma.subscription.count({
+          where: { package: { resellerId: ctx.resellerId }, status: "SUSPENDED" },
+        }),
+        prisma.subscription.count({
+          where: {
+            package: { resellerId: ctx.resellerId },
+            status: { in: ["EXPIRED", "CANCELLED"] },
+          },
+        }),
+      ]),
+      prisma.subscription.findMany({
+        where: { package: { resellerId: ctx.resellerId } },
+        orderBy: { updatedAt: "desc" },
+        take: 8,
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          expiresAt: true,
+          user: { select: { name: true, phone: true } },
+          package: { select: { name: true, price: true } },
+        },
+      }),
     ]);
 
     // Enrich top packages with names
@@ -129,6 +167,9 @@ export async function GET(req: NextRequest) {
       orderBy: { subscriptions: { _count: "desc" } },
       take: 5,
     });
+
+    const [pkgTotal, pkgActive] = packagesSummary;
+    const [subActiveStrict, subSuspended, subExpiredCancelled] = subscriptionStats;
 
     return apiSuccess({
       revenue: {
@@ -163,6 +204,13 @@ export async function GET(req: NextRequest) {
       },
       recentPayments,
       popularPackages,
+      packagesSummary: { total: pkgTotal, active: pkgActive },
+      subscriptionStats: {
+        activePaid: subActiveStrict,
+        suspended: subSuspended,
+        expiredOrCancelled: subExpiredCancelled,
+      },
+      recentSubscriptions,
     });
   } catch (error) {
     console.error("[Reseller Dashboard] Error:", error);

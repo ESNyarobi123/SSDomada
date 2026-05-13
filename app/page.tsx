@@ -209,6 +209,49 @@ function Navbar() {
 // ============================================================
 function HeroSection() {
   const { t } = useLandingLocale();
+  const [live, setLive] = useState<{
+    activeResellers: number;
+    liveWifiPackages: number;
+    activeWifiSubscriptions: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/v1/public/platform-stats")
+      .then((r) => r.json())
+      .then((j: { success?: boolean; data?: typeof live }) => {
+        if (!cancelled && j?.success && j.data) setLive(j.data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const stats = [
+    {
+      key: `resellers-${live?.activeResellers ?? "fallback"}`,
+      value: live ? Math.max(live.activeResellers, 1) : 500,
+      suffix: "+",
+      label: t.hero.stats[0].label,
+      icon: Users,
+    },
+    {
+      key: `wifi-${live?.activeWifiSubscriptions ?? "fallback"}`,
+      value: live ? Math.max(live.activeWifiSubscriptions, 1) : 10000,
+      suffix: "+",
+      label: t.hero.stats[1].label,
+      icon: Wifi,
+    },
+    {
+      key: "uptime",
+      value: 99,
+      suffix: ".9%",
+      label: t.hero.stats[2].label,
+      icon: Activity,
+    },
+  ];
+
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
       {/* Animated bg */}
@@ -312,12 +355,11 @@ function HeroSection() {
 
         {/* Stats — glassmorphism 3D cards */}
         <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto perspective-1000">
-          {[
-            { value: 500, suffix: "+", label: t.hero.stats[0].label, icon: Users },
-            { value: 10000, suffix: "+", label: t.hero.stats[1].label, icon: Wifi },
-            { value: 99, suffix: ".9%", label: t.hero.stats[2].label, icon: Activity },
-          ].map((stat) => (
-            <div key={stat.label} className="group p-5 rounded-2xl glass-3d tilt-card hover:scale-[1.03] transition-all duration-300">
+          {stats.map((stat) => (
+            <div
+              key={stat.key}
+              className="group p-5 rounded-2xl glass-3d tilt-card hover:scale-[1.03] transition-all duration-300"
+            >
               <stat.icon className="w-5 h-5 text-gold mx-auto mb-2 group-hover:scale-110 transition-transform" />
               <div className="text-2xl md:text-3xl font-black text-gold">
                 <AnimatedCounter target={stat.value} suffix={stat.suffix} />

@@ -35,7 +35,7 @@ const sections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/super-admin/resellers", label: "Resellers", icon: Store },
       { href: "/super-admin/customers", label: "Customers", icon: Users },
-      { href: "/super-admin/subscriptions", label: "Plans & subscriptions", icon: Package },
+      { href: "/super-admin/subscriptions", label: "Subscriptions", icon: Package },
       { href: "/super-admin/payments", label: "Payments", icon: CreditCard },
       { href: "/super-admin/payouts", label: "Withdrawals & payouts", icon: Banknote },
     ],

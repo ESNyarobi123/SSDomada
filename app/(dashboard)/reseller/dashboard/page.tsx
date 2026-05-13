@@ -56,6 +56,16 @@ type Dash = {
     duration: string;
     _count: { subscriptions: number };
   }>;
+  packagesSummary: { total: number; active: number };
+  subscriptionStats: { activePaid: number; suspended: number; expiredOrCancelled: number };
+  recentSubscriptions: Array<{
+    id: string;
+    status: string;
+    startedAt: string;
+    expiresAt: string;
+    user: { name: string | null; phone: string | null };
+    package: { name: string; price: number };
+  }>;
 };
 
 export default function ResellerDashboardPage() {
@@ -240,6 +250,74 @@ export default function ResellerDashboardPage() {
           </div>
           <div className="text-3xl font-black text-white">{d.pendingWithdrawals.count}</div>
           <div className="text-xs text-gold mt-2 font-semibold">{formatTzs(d.pendingWithdrawals.amount)}</div>
+        </div>
+      </div>
+
+      {/* ── Wi‑Fi catalog & subscription pulse (same data surface as super-admin / landing) ── */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Package className="w-5 h-5 text-gold" />
+              Wi‑Fi packages
+            </h2>
+            <Link href="/reseller/packages" className="text-xs font-semibold text-gold hover:underline">
+              Manage
+            </Link>
+          </div>
+          <div className="flex gap-6 text-sm mb-4">
+            <div>
+              <div className="text-onyx-500 text-xs uppercase">In catalog</div>
+              <div className="text-2xl font-black text-white">{d.packagesSummary?.total ?? 0}</div>
+            </div>
+            <div>
+              <div className="text-onyx-500 text-xs uppercase">Active offers</div>
+              <div className="text-2xl font-black text-gold">{d.packagesSummary?.active ?? 0}</div>
+            </div>
+          </div>
+          <p className="text-xs text-onyx-500">
+            Packages here power your captive portal and public <code className="text-gold/90">/portal/[brand]</code> pricing — they sync from the same catalog super-admins can curate.
+          </p>
+        </div>
+        <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Users className="w-5 h-5 text-emerald-400" />
+              Customer subscriptions
+            </h2>
+            <Link href="/reseller/clients" className="text-xs font-semibold text-gold hover:underline">
+              Clients
+            </Link>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center text-xs mb-4">
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 py-2">
+              <div className="text-emerald-400 font-bold text-lg">{d.subscriptionStats?.activePaid ?? 0}</div>
+              <div className="text-onyx-500">Active</div>
+            </div>
+            <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 py-2">
+              <div className="text-sky-300 font-bold text-lg">{d.subscriptionStats?.suspended ?? 0}</div>
+              <div className="text-onyx-500">Suspended</div>
+            </div>
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 py-2">
+              <div className="text-amber-300 font-bold text-lg">{d.subscriptionStats?.expiredOrCancelled ?? 0}</div>
+              <div className="text-onyx-500">Ended</div>
+            </div>
+          </div>
+          <div className="border-t border-white/[0.06] pt-3">
+            <div className="text-[10px] font-bold uppercase text-onyx-500 mb-2">Recently updated</div>
+            <ul className="space-y-2 max-h-40 overflow-y-auto text-sm">
+              {(d.recentSubscriptions ?? []).length === 0 ? (
+                <li className="text-onyx-500">No subscriptions yet.</li>
+              ) : (
+                (d.recentSubscriptions ?? []).map((s) => (
+                  <li key={s.id} className="flex justify-between gap-2 text-onyx-300">
+                    <span className="truncate text-white">{s.user.name || s.user.phone || "—"}</span>
+                    <span className="shrink-0 text-[10px] uppercase text-gold">{s.status}</span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
         </div>
       </div>
 
