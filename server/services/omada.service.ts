@@ -1010,9 +1010,9 @@ export class OmadaService {
   static async setExternalPortal(
     omadaSiteId: string,
     opts: { name: string; portalUrl: string; ssidIds?: string[] }
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; errorCode?: number; msg?: string }> {
     try {
-      const res = await OmadaClient.post<{ errorCode: number }>(
+      const res = await OmadaClient.post<{ errorCode: number; msg?: string }>(
         `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals`,
         {
           name: opts.name,
@@ -1024,10 +1024,11 @@ export class OmadaService {
           ssids: opts.ssidIds || [],
         }
       );
-      return res.errorCode === 0;
+      if (res.errorCode === 0) return { ok: true };
+      return { ok: false, errorCode: res.errorCode, msg: typeof res.msg === "string" ? res.msg : undefined };
     } catch (err) {
       console.error("[OmadaService] setExternalPortal failed:", err);
-      return false;
+      return { ok: false, msg: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1043,8 +1044,9 @@ export class OmadaService {
     if (Array.isArray(result)) return result as Record<string, unknown>[];
     if (result && typeof result === "object") {
       const r = result as Record<string, unknown>;
-      if (Array.isArray(r.data)) return r.data as Record<string, unknown>[];
-      if (Array.isArray(r.list)) return r.list as Record<string, unknown>[];
+      for (const key of ["data", "list", "rows", "records", "portals", "items"] as const) {
+        if (Array.isArray(r[key])) return r[key] as Record<string, unknown>[];
+      }
     }
     return [];
   }
@@ -1052,20 +1054,25 @@ export class OmadaService {
   /** List portal profiles configured on an Omada site (Open API shape varies by controller version). */
   static async listSitePortals(omadaSiteId: string): Promise<Record<string, unknown>[]> {
     for (const ver of ["v1", "v2"] as const) {
-      try {
-        const path = `/openapi/${ver}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals`;
-        const res = await OmadaClient.get<unknown>(path);
-        const rows = OmadaService.extractPortalRows(res);
-        if (rows.length > 0) return rows;
-      } catch {
-        /* try next */
+      const bases = [
+        `/openapi/${ver}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals?currentPage=1&currentPageSize=100`,
+        `/openapi/${ver}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/portals`,
+      ];
+      for (const path of bases) {
+        try {
+          const res = await OmadaClient.get<unknown>(path);
+          const rows = OmadaService.extractPortalRows(res);
+          if (rows.length > 0) return rows;
+        } catch {
+          /* try next */
+        }
       }
     }
     return [];
   }
 
   private static pickPortalRowId(row: Record<string, unknown>): string | null {
-    const v = row.portalId ?? row.id;
+    const v = row.portalId ?? row.portalID ?? row.id;
     return typeof v === "string" && v.length > 0 ? v : null;
   }
 
@@ -1143,14 +1150,20 @@ export class OmadaService {
         return { ok: false, method: "skipped", message: "Found portal but PATCH ssids failed (check controller API version)." };
       }
 
-      const posted = await OmadaService.setExternalPortal(omadaSiteId, {
+      const postRes = await OmadaService.setExternalPortal(omadaSiteId, {
         name: opts.portalName,
         portalUrl: opts.portalUrl,
         ssidIds: merged,
       });
-      return posted
+      return postRes.ok
         ? { ok: true, method: "post" }
-        : { ok: false, method: "post", message: "POST portals failed (no existing portal row to PATCH)." };
+        : {
+            ok: false,
+            method: "post",
+            message:
+              postRes.msg ||
+              (postRes.errorCode != null ? `POST portals errorCode=${postRes.errorCode}` : "POST portals failed (list empty or Omada rejected)."),
+          };
     } catch (err) {
       console.error("[OmadaService] syncExternalPortalWithOpenSsids failed:", err);
       return { ok: false, message: err instanceof Error ? err.message : String(err) };

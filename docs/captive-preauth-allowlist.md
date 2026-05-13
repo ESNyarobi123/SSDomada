@@ -58,3 +58,66 @@ If we add Omada Open API support for pre-auth in the future, a single variable s
 ## SSDomada: push portal URL + SSIDs (Open API)
 
 After deploy, call **`POST /api/v1/reseller/omada/sync-portal`** (Bearer session token) to re-attach every **open** SSID that has an `omadaSsidId` to the site’s external portal on Omada. Optional JSON body: `{ "siteId": "<site cuid>" }` to limit to one site. Pre-authentication allowlist is still **manual** in Omada (see above).
+
+---
+
+## Hatua kwa hatua — reseller (portal + pre-authentication)
+
+Hizi ni hatua **kwa mpangilio**. Sehemu ya SSDomada (dashboard) na sehemu ya **Omada Controller** (kivinjari).
+
+### Sehemu A — SSDomada (dashboard ya reseller)
+
+1. **Hakikisha akaunti iko tayari**  
+   Ingia `https://ssdomada.site/login` kama reseller, uwe na **site** (eneo) na **SSID** iliyounganishwa na Omada (site ina `omadaSiteId` baada ya kuundwa au ku-link).
+
+2. **Weka captive portal (branding)**  
+   Nenda **Captive portal** → pakia logo/msingi ikiwa unataka → **Save**. Hii hai-pushi Omada moja kwa moja; inahifadhi muonekano wa `/portal/{brandSlug}`.
+
+3. **SSID ya Wi‑Fi ya wateja**  
+   Nenda **SSIDs** → unda SSID **bila password** (open) kwa site sahihi.  
+   - Ikiwa Omada imeunganishwa vizuri, SSID inaweza kuonekana kama `pushedToOmada` / `omadaSsidId` kwenye majibu.  
+   - **Baada ya deploy ya code ya hivi karibuni**, kuunda SSID wazi mara nyingi inajaribu tena kuambatanisha portal kwenye Omada kiotomatiki.
+
+4. **Push tena portal URL + kuambatanisha SSID kwenye Omada (API)**  
+   Hii inahitaji **toleo la app** linalo endpoint `POST /api/v1/reseller/omada/sync-portal`.  
+   - **Njia 1 — DevTools (rahisi):** fungua dashboard ya reseller → **F12 → Network** → kwenye tab ingine u fungua Console uandike (au tumia “Copy as cURL” baada ya ombi lolote linalo `Authorization: Bearer`):  
+     - Omba `POST /api/v1/reseller/omada/sync-portal` na mwili `{}` (sync sites zote zenye Omada) au `{"siteId":"<id ya site>"}` kwa site moja.  
+   - **Njia 2 — Terminal:** (badilisha `TOKEN` na token kutoka login)  
+     `curl -sS -X POST "https://ssdomada.site/api/v1/reseller/omada/sync-portal" -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d "{}"`  
+   - Angalia majibu: `sites[].sync.ok`, `portalUrl`, na `openSsidNames` — lazima ziendane na SSID zako **wazi** zilizo na `omadaSsidId`.
+
+5. **URL ya umma (mazingira ya server)** — jukumu la admin / deploy  
+   `NEXT_PUBLIC_APP_URL` (au `OMADA_PORTAL_PUBLIC_BASE_URL`) lazima iwe **HTTPS** halisi inayofikiwa na controller na simu (mfano `https://ssdomada.site`). Hii ndiyo msingi wa **External Portal URL** inayotumwa Omada.
+
+### Sehemu B — Omada Controller (mkono — pre-authentication)
+
+6. **Ingia Omada Controller** (URL ya controller yenu, mfano `https://server...`).
+
+7. **Chagua site sahihi**  
+   Lazima iwe **ile site** inayolingana na SSDomada (sawia na `omadaSiteId` ya site yako).
+
+8. **Weka / thibitisha External Portal**  
+   **Settings → Authentication → Portal** (au mahali panapoitwa “Hotspot / Portal” kulingana na toleo):  
+   - Aina: **External Portal** / **External RADIUS** kama ilivyowekwa na SSDomada.  
+   - **External Portal URL** inapaswa kuwa kama `https://…/portal/{brandSlug}` (sawa na `portalUrl` kutoka sync).  
+   - Thibitisha portal imeambatanishwa na **SSID** / wireless network sahihi (kwa UI ya Omada).
+
+9. **Pre-Authentication Access (hapa ndipo “Google / Apple / Microsoft”)**  
+   - Nenda **Portal** → **Access Control** / **Pre-Authentication Access** (jina linatofautiana na toleo la Omada).  
+   - Ongeza **URL au hostname** kwa kila moja inayohitajika **kabla** ya mteja kumaliza login (angalia jedwali “Suggested hostname allowlist” hapo juu).  
+   - **Hakikisha** umeongeza: domain ya app yako (`ssdomada.site`), na host ya **Snippe** (kutoka `SNIPPE_API_URL`), pamoja na `captive.apple.com`, `connectivitycheck.gstatic.com`, `clients3.google.com`, `www.msftconnecttest.com`, `dns.msftncsi.com`, nk. kama orodha ya juu.  
+   - Hii hatua **haiwezi** kwa sasa kufanywa peke yake kutoka SSDomada bila API ya wazi ya Omada — **lazima mkono** kwenye controller.
+
+10. **Hifadhi** mipangilio ya Omada na subiri provisioning (kadri ya controller).
+
+### Sehemu C — kuthibitisha
+
+11. **Simu** — unganisha Wi‑Fi ya SSID wazi → inapaswa kuonyesha **sign-in / captive** au kufungua portal.  
+12. **Jaribu malipo** (ikiwa kuna package) — ikiwa Snippe haifunguki, ongeza host zinazokosekana kwenye pre-auth.  
+13. **Rudia sync** ikiwa umeongeza SSID mpya wazi baadaye: tena `POST …/omada/sync-portal`.
+
+### Tatizo la kawaida
+
+- **Portal haionekani / hakuna “Sign in to network”:** ongeza / sahihisha **Pre-Authentication Access** (hatua 9).  
+- **Portal haifunguki kabisa:** angalia **External URL** na HTTPS + `NEXT_PUBLIC_APP_URL`.  
+- **SSID haipo kwenye portal Omada:** endesha **sync-portal** (hatua 4) au angalia SSID ni **open** na iko na `omadaSsidId` kwenye SSDomada.
