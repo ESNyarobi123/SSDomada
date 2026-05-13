@@ -214,14 +214,53 @@ export class OmadaService {
   // DEVICES
   // ============================================================
 
+  /** 12 hex chars for MAC equality checks (Omada may use colons or hyphens). */
+  static comparableMac(mac: string | null | undefined): string {
+    if (!mac) return "";
+    return mac.toUpperCase().replace(/[:-]/g, "");
+  }
+
+  /** MAC string from an Omada device row (field names differ by controller / firmware). */
+  static macFromOmadaDeviceRow(d: OmadaDevice | Record<string, unknown>): string {
+    const o = d as Record<string, unknown>;
+    const v = o.mac ?? o.macAddr ?? o.deviceMac ?? o.apMac;
+    return typeof v === "string" ? v : "";
+  }
+
+  static omadaRowMatchesMac(row: unknown, dbMac: string): boolean {
+    const key = OmadaService.comparableMac(OmadaService.macFromOmadaDeviceRow(row as OmadaDevice));
+    return key.length === 12 && key === OmadaService.comparableMac(dbMac);
+  }
+
   /**
-   * List devices for a specific site from Omada Controller
+   * List devices for a specific site from Omada Controller.
+   * Many Omada builds return an empty first page unless `page` and `pageSize` are set (same as sites list).
    */
   static async listDevices(omadaSiteId: string): Promise<OmadaDevice[]> {
-    const res = await OmadaClient.get<OmadaApiResponse<OmadaDevice>>(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/devices`
-    );
-    return res.result.data;
+    const acc: OmadaDevice[] = [];
+    let page = 1;
+    const pageSize = 500;
+
+    for (let guard = 0; guard < 40; guard++) {
+      const res = await OmadaClient.get<OmadaApiResponse<OmadaDevice>>(
+        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/devices?page=${page}&pageSize=${pageSize}`
+      );
+
+      if (typeof res?.errorCode === "number" && res.errorCode !== 0) {
+        console.warn("[OmadaService] listDevices non-zero errorCode:", res.errorCode, res.msg);
+        break;
+      }
+
+      const batch = Array.isArray(res?.result?.data) ? res.result.data : [];
+      acc.push(...batch);
+
+      const total = res?.result?.totalRows;
+      if (typeof total === "number" && acc.length >= total) break;
+      if (batch.length < pageSize) break;
+      page += 1;
+    }
+
+    return acc;
   }
 
   /**
@@ -316,6 +355,13 @@ export class OmadaService {
     return hex.match(/.{2}/g)!.join(":");
   }
 
+  /** Some controller builds expect hyphenated MAC in `/cmd/devices/{mac}/…` paths (OpenAPI examples use AA-BB-…). */
+  static normalizeMacForOmadaDevicePathHyphen(mac: string): string {
+    const hex = mac.replace(/[:-]/g, "").toUpperCase();
+    if (!/^[0-9A-F]{12}$/.test(hex)) return mac.trim();
+    return hex.match(/.{2}/g)!.join("-");
+  }
+
   /**
    * Adopt a device into a site on Omada Controller.
    * The device must already be connected to the network and visible to the controller.
@@ -350,14 +396,13 @@ export class OmadaService {
     const shouldTryV2 = (message?: string) =>
       process.env.OMADA_ADOPT_TRY_V2 === "true" || (!!message && /404|Not Found|"status":\s*404/i.test(message));
 
-    const v1Path = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`;
-    const v2Path = `/openapi/v2/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`;
-
-    try {
+    const macHyp = OmadaService.normalizeMacForOmadaDevicePathHyphen(deviceMac);
+    const tryAdoptPaths = async (seg: string) => {
+      const v1Path = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${seg}/adopt`;
+      const v2Path = `/openapi/v2/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${seg}/adopt`;
       const res = (await OmadaClient.post<Record<string, unknown>>(v1Path, {})) as Record<string, unknown>;
       const first = parseResult(res);
       if (first.adopted) return first;
-
       if (shouldTryV2(first.message)) {
         try {
           const res2 = (await OmadaClient.post<Record<string, unknown>>(v2Path, {})) as Record<string, unknown>;
@@ -377,8 +422,25 @@ export class OmadaService {
           };
         }
       }
-
       return first;
+    };
+
+    try {
+      const colon = await tryAdoptPaths(macSeg);
+      if (colon.adopted) return colon;
+      const looks404 = /404|Not Found|"status":\s*404/i.test(colon.message || "");
+      if (looks404 && macHyp !== macSeg) {
+        const hyphen = await tryAdoptPaths(macHyp);
+        if (hyphen.adopted) return hyphen;
+        if (hyphen.message) {
+          return {
+            adopted: false,
+            message: `colon-MAC: ${colon.message || "failed"} · hyphen-MAC: ${hyphen.message}`,
+            errorCode: hyphen.errorCode ?? colon.errorCode,
+          };
+        }
+      }
+      return colon;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] adoptDevice failed:", err);
@@ -392,10 +454,9 @@ export class OmadaService {
   static async findDeviceByMac(omadaSiteId: string, mac: string) {
     try {
       const devices = await this.listDevices(omadaSiteId);
-      const target = mac.toUpperCase().replace(/[:-]/g, "");
-      return (
-        devices.find((d) => (d.mac || "").toUpperCase().replace(/[:-]/g, "") === target) || null
-      );
+      const target = OmadaService.comparableMac(mac);
+      if (target.length !== 12) return null;
+      return devices.find((d) => OmadaService.omadaRowMatchesMac(d, mac)) || null;
     } catch {
       return null;
     }

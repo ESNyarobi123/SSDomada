@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyAdmin, apiSuccess, apiError, logAdminAction, getClientIp } from "@/server/middleware/admin-auth";
 import { OmadaService } from "@/server/services/omada.service";
+import type { OmadaDevice } from "@/types/omada";
 
 /**
  * GET /api/v1/admin/omada/devices
@@ -50,8 +51,8 @@ export async function GET(req: NextRequest) {
 
     // Merge DB and Omada data
     const merged = dbDevices.map((dbDevice) => {
-      const omadaMatch = omadaDevices.find(
-        (od: any) => od.mac?.toLowerCase() === dbDevice.mac?.toLowerCase()
+      const omadaMatch = omadaDevices.find((od: OmadaDevice) =>
+        OmadaService.omadaRowMatchesMac(od, dbDevice.mac)
       );
 
       return {
@@ -64,9 +65,9 @@ export async function GET(req: NextRequest) {
     });
 
     // Find unregistered devices (on Omada but not in DB)
-    const registeredMacs = dbDevices.map((d) => d.mac.toLowerCase());
+    const registeredMacs = dbDevices.map((d) => OmadaService.comparableMac(d.mac));
     const unregistered = omadaDevices.filter(
-      (od: any) => !registeredMacs.includes(od.mac?.toLowerCase())
+      (od: OmadaDevice) => !registeredMacs.includes(OmadaService.comparableMac(OmadaService.macFromOmadaDeviceRow(od)))
     );
 
     return apiSuccess({

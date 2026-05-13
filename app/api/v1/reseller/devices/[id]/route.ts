@@ -3,6 +3,7 @@ import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { updateDeviceSchema } from "@/lib/validations/reseller";
 import { OmadaService, type OmadaSiteLinkSource } from "@/server/services/omada.service";
+import type { OmadaDevice } from "@/types/omada";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -33,9 +34,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     if (device.site?.omadaSiteId && device.mac) {
       try {
         const omadaDevices = await OmadaService.listDevices(device.site.omadaSiteId);
-        const match = omadaDevices.find(
-          (od: any) => od.mac?.toLowerCase() === device.mac.toLowerCase()
-        );
+        const match = omadaDevices.find((od: OmadaDevice) => OmadaService.omadaRowMatchesMac(od, device.mac));
         if (match) {
           liveData = {
             liveStatus: match.status === 1 ? "ONLINE" : "OFFLINE",
