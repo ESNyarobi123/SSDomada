@@ -600,17 +600,22 @@ export class OmadaService {
       ];
       for (const raw of attempts) {
         try {
-          const res = await OmadaClient.post<{ errorCode: number; msg?: string; result?: unknown }>(path, raw);
-          if (res.errorCode === 0) {
-            const id = OmadaService.extractOmadaEntityIdFromPostResult(res.result);
-            if (id) return { omadaSsidId: id };
+          const res = await OmadaClient.post<{ errorCode?: number; msg?: string; result?: unknown }>(path, raw);
+          const id = OmadaService.extractOmadaEntityIdFromPostResult(res?.result);
+          if (id) return { omadaSsidId: id };
+          if (res?.errorCode === 0) {
             last = {
               omadaSsidId: null,
               errorCode: 0,
               msg: res.msg || "Omada returned success but no SSID id in quick-create response",
             };
           } else {
-            last = { omadaSsidId: null, errorCode: res.errorCode, msg: res.msg };
+            const rawJson = JSON.stringify(res).slice(0, 600);
+            last = {
+              omadaSsidId: null,
+              errorCode: typeof res?.errorCode === "number" ? res.errorCode : -1,
+              msg: res.msg || `quick-create: ${rawJson}`,
+            };
           }
         } catch (err) {
           last = { omadaSsidId: null, msg: err instanceof Error ? err.message : String(err) };
@@ -665,18 +670,18 @@ export class OmadaService {
       });
 
       const res = await OmadaClient.post<{
-        errorCode: number;
+        errorCode?: number;
         msg?: string;
         result?: unknown;
       }>(`${base}/wireless-network/wlans/${wlan.id}/ssids`, body);
 
-      if (res.errorCode !== 0) {
-        console.error("[OmadaService] createSsid rejected:", res.errorCode, res.msg, { wlanId: wlan.id, bodyKeys: Object.keys(body) });
-        return { omadaSsidId: null, errorCode: res.errorCode, msg: res.msg };
+      const omadaSsidIdEarly = this.extractOmadaEntityIdFromPostResult(res?.result);
+      if (omadaSsidIdEarly) {
+        return { omadaSsidId: omadaSsidIdEarly };
       }
 
-      const omadaSsidId = this.extractOmadaEntityIdFromPostResult(res.result);
-      if (!omadaSsidId) {
+      const code = res?.errorCode;
+      if (code === 0) {
         const snippet = JSON.stringify(res.result)?.slice(0, 800);
         console.warn("[OmadaService] createSsid: errorCode 0 but no id in result:", snippet);
         return {
@@ -687,7 +692,14 @@ export class OmadaService {
             : "Omada accepted the request but returned an empty result for SSID id",
         };
       }
-      return { omadaSsidId };
+
+      const raw = JSON.stringify(res).slice(0, 900);
+      console.error("[OmadaService] createSsid rejected or ambiguous:", code, res.msg, { wlanId: wlan.id, raw });
+      return {
+        omadaSsidId: null,
+        errorCode: typeof code === "number" ? code : -1,
+        msg: res.msg || (typeof code === "number" ? `Omada errorCode=${code}` : `Unexpected Omada response (expected errorCode:0 and id): ${raw}`),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] createSsid failed:", err);
