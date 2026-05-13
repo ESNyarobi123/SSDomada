@@ -371,8 +371,14 @@ export class OmadaService {
    * **Fallback:** legacy `POST .../cmd/devices/{mac}/adopt` (colon or hyphen) for older deployments.
    *
    * `start-adopt` returns `errorCode === 0` when the command is accepted; use Omada UI or `listDevices` to confirm adoption finished.
+   *
+   * @param deviceCreds Optional AP web UI username/password (both required together). Overrides `OMADA_DEVICE_USERNAME` / `OMADA_DEVICE_PASSWORD` when set.
    */
-  static async adoptDevice(omadaSiteId: string, deviceMac: string): Promise<{
+  static async adoptDevice(
+    omadaSiteId: string,
+    deviceMac: string,
+    deviceCreds?: { username?: string; password?: string }
+  ): Promise<{
     adopted: boolean;
     message?: string;
     errorCode?: number;
@@ -430,8 +436,10 @@ export class OmadaService {
     try {
       const startPath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/devices/${macHyp}/start-adopt`;
       const adoptBody: Record<string, unknown> = {};
-      if (process.env.OMADA_DEVICE_USERNAME) adoptBody.username = process.env.OMADA_DEVICE_USERNAME;
-      if (process.env.OMADA_DEVICE_PASSWORD) adoptBody.password = process.env.OMADA_DEVICE_PASSWORD;
+      const u = deviceCreds?.username?.trim() || process.env.OMADA_DEVICE_USERNAME;
+      const p = deviceCreds?.password || process.env.OMADA_DEVICE_PASSWORD;
+      if (u) adoptBody.username = u;
+      if (p) adoptBody.password = p;
 
       const startRes = (await OmadaClient.post<Record<string, unknown>>(startPath, adoptBody)) as Record<string, unknown>;
       const startParsed = parseResult(startRes);

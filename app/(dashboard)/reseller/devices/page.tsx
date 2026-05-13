@@ -33,7 +33,14 @@ export default function ResellerDevicesPage() {
   const [omadaNotice, setOmadaNotice] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", mac: "", siteId: "", type: "AP" });
+  const [form, setForm] = useState({
+    name: "",
+    mac: "",
+    siteId: "",
+    type: "AP",
+    deviceUsername: "",
+    devicePassword: "",
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,6 +95,9 @@ export default function ResellerDevicesPage() {
         mac: form.mac.trim(),
         siteId: form.siteId,
         type: form.type,
+        ...(form.deviceUsername.trim() && form.devicePassword
+          ? { deviceUsername: form.deviceUsername.trim(), devicePassword: form.devicePassword }
+          : {}),
       }),
     });
     const json = await res.json();
@@ -133,7 +143,7 @@ export default function ResellerDevicesPage() {
       }
     }
     setShowAdd(false);
-    setForm({ name: "", mac: "", siteId: sites[0]?.id || "", type: "AP" });
+    setForm({ name: "", mac: "", siteId: sites[0]?.id || "", type: "AP", deviceUsername: "", devicePassword: "" });
     setSaving(false);
     void load();
     void (async () => {
@@ -158,7 +168,7 @@ export default function ResellerDevicesPage() {
         <button
           type="button"
           onClick={() => {
-            setForm((f) => ({ ...f, siteId: f.siteId || sites[0]?.id || "" }));
+            setForm((f) => ({ ...f, siteId: f.siteId || sites[0]?.id || "", deviceUsername: "", devicePassword: "" }));
             setShowAdd(true);
           }}
           className="inline-flex items-center justify-center gap-2 rounded-xl bg-gold px-4 py-2.5 text-sm font-bold text-onyx-950 shadow-lg shadow-gold/20 hover:bg-gold-400 hover:shadow-gold/30 hover:scale-[1.02] active:scale-[0.98] transition-all shrink-0"
@@ -426,7 +436,8 @@ export default function ResellerDevicesPage() {
             </div>
             <p className="text-xs text-onyx-400 mb-5">
               MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF (from the AP Status page or Omada Pending list). The AP must
-              appear under this Omada site as Pending before adopt succeeds. If you hit a device limit (HTTP 402),
+              appear under this Omada site as Pending before adopt succeeds. If the AP’s tplinkeap.net username/password
+              were changed, enter them below so Omada can adopt (same as the controller popup). If you hit a device limit (HTTP 402),
               upgrade the platform plan or ask super-admin to review paywall settings for testing.
             </p>
             <form onSubmit={addDevice} className="space-y-4">
@@ -479,6 +490,29 @@ export default function ResellerDevicesPage() {
                   <option value="GATEWAY">Gateway</option>
                   <option value="OTHER">Other</option>
                 </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">AP login (optional)</label>
+                <p className="text-[11px] text-onyx-500 mt-1 mb-2">
+                  If you changed the device’s username/password on tplinkeap.net, enter both here. Leave blank to use the platform’s default Omada device account.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <input
+                    autoComplete="off"
+                    value={form.deviceUsername}
+                    onChange={(e) => setForm((f) => ({ ...f, deviceUsername: e.target.value }))}
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 outline-none transition-colors"
+                    placeholder="Device username"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.devicePassword}
+                    onChange={(e) => setForm((f) => ({ ...f, devicePassword: e.target.value }))}
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 outline-none transition-colors"
+                    placeholder="Device password"
+                  />
+                </div>
               </div>
               <div className="flex gap-3 pt-2">
                 <button

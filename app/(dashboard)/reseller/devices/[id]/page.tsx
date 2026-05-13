@@ -13,6 +13,7 @@ import {
   Unplug,
   RefreshCw,
   Link2,
+  X,
 } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 
@@ -51,6 +52,9 @@ export default function ResellerDeviceDetailPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [adoptOpen, setAdoptOpen] = useState(false);
+  const [adoptUser, setAdoptUser] = useState("");
+  const [adoptPass, setAdoptPass] = useState("");
 
   const loadDevice = useCallback(async () => {
     setLoading(true);
@@ -118,6 +122,41 @@ export default function ResellerDeviceDetailPage() {
       router.push("/reseller/devices");
       return;
     }
+    void loadDevice();
+  }
+
+  async function submitAdopt() {
+    setBusy("adopt");
+    setMsg(null);
+    setErr(null);
+    const payload: Record<string, unknown> = { action: "adopt" };
+    if (adoptUser.trim() && adoptPass) {
+      payload.deviceUsername = adoptUser.trim();
+      payload.devicePassword = adoptPass;
+    } else if (adoptUser.trim() || adoptPass) {
+      setBusy(null);
+      setErr("Enter both username and password for the device, or leave both empty to use the platform default.");
+      return;
+    }
+    const res = await fetch(`/api/v1/reseller/devices/${id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    setBusy(null);
+    if (!res.ok) {
+      setErr(json.error || "Request failed");
+      return;
+    }
+    setAdoptOpen(false);
+    setAdoptUser("");
+    setAdoptPass("");
+    setMsg(json.data?.message || "Done");
     void loadDevice();
   }
 
@@ -189,13 +228,10 @@ export default function ResellerDeviceDetailPage() {
               type="button"
               disabled={!!busy}
               onClick={() => {
-                if (
-                  !confirm(
-                    "Try adopting this device on Omada again? The AP should already appear as Pending on this site in Omada (Inform URL set)."
-                  )
-                )
-                  return;
-                void patch("adopt");
+                setErr(null);
+                setAdoptUser("");
+                setAdoptPass("");
+                setAdoptOpen(true);
               }}
               className="inline-flex items-center gap-2 rounded-xl border border-sky-500/40 px-3 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
             >
@@ -405,6 +441,73 @@ export default function ResellerDeviceDetailPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {adoptOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+          onClick={() => !busy && setAdoptOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-sky-500/25 bg-onyx-950 p-6 shadow-2xl relative"
+          >
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => setAdoptOpen(false)}
+              className="absolute top-4 right-4 text-onyx-400 hover:text-white disabled:opacity-40"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h2 className="text-lg font-bold text-white pr-8">Adopt on Omada</h2>
+            <p className="text-xs text-onyx-400 mt-2 mb-4">
+              If Omada asks for the AP’s current login (because tplinkeap.net credentials were changed), enter them here.
+              Leave both empty to use the platform default device account (server <span className="font-mono text-onyx-300">OMADA_DEVICE_*</span>).
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-onyx-500">Device username</label>
+                <input
+                  autoComplete="off"
+                  value={adoptUser}
+                  onChange={(e) => setAdoptUser(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white"
+                  placeholder="Optional"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-onyx-500">Device password</label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={adoptPass}
+                  onChange={(e) => setAdoptPass(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white"
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button
+                type="button"
+                disabled={!!busy}
+                onClick={() => setAdoptOpen(false)}
+                className="flex-1 rounded-xl border border-white/10 py-2.5 text-sm font-medium text-onyx-300 hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!!busy}
+                onClick={() => void submitAdopt()}
+                className="flex-1 rounded-xl bg-sky-600 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-40"
+              >
+                {busy === "adopt" ? "Adopting…" : "Run adopt"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

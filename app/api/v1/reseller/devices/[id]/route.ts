@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
-import { updateDeviceSchema } from "@/lib/validations/reseller";
+import { updateDeviceSchema, deviceAdoptCredentialsSchema } from "@/lib/validations/reseller";
 import { OmadaService, type OmadaSiteLinkSource } from "@/server/services/omada.service";
 import type { OmadaDevice } from "@/types/omada";
 
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 /**
  * PATCH /api/v1/reseller/devices/[id]
  * Update device name/type, or perform actions (reboot, forget, adopt).
- * Actions: reboot, forget, adopt (retry Omada adopt after the AP reaches the controller)
+ * Actions: reboot, forget, adopt (optional body: `deviceUsername` + `devicePassword` for Omada when the AP’s login was changed from defaults)
  */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
   const ctx = await verifyReseller(req);
@@ -133,7 +133,23 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
           "Omada does not list this MAC on this site yet. Confirm Inform URL on the AP (tplinkeap.net → System → Controller Settings) and wait until the AP appears as Pending on this Omada site.";
       }
 
-      const adoptRes = await OmadaService.adoptDevice(omadaSiteId, macUpper);
+      const credsCheck = deviceAdoptCredentialsSchema.safeParse({
+        deviceUsername: body.deviceUsername,
+        devicePassword: body.devicePassword,
+      });
+      if (!credsCheck.success) {
+        return apiError(
+          credsCheck.error.issues.map((e) => e.message).join(" ") || "Invalid adopt credentials",
+          422,
+          "VALIDATION_ERROR"
+        );
+      }
+      const adoptCreds =
+        credsCheck.data.deviceUsername?.trim() && credsCheck.data.devicePassword
+          ? { username: credsCheck.data.deviceUsername.trim(), password: credsCheck.data.devicePassword }
+          : undefined;
+
+      const adoptRes = await OmadaService.adoptDevice(omadaSiteId, macUpper, adoptCreds);
       omada.adopted = adoptRes.adopted;
       if (!adoptRes.adopted) {
         omada.message = adoptRes.message;

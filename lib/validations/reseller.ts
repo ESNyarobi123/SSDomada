@@ -41,13 +41,45 @@ export const updatePackageSchema = createPackageSchema.partial();
 // Devices
 // ============================================================
 
-export const addDeviceSchema = z.object({
-  name: z.string().min(1).max(100),
-  mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address format (XX:XX:XX:XX:XX:XX)"),
-  // Site primary keys may be fixed seed ids (e.g. seed-site-1) or Prisma cuids; ownership is enforced in the route.
-  siteId: z.string().min(1).max(128),
-  type: z.enum(["AP", "SWITCH", "GATEWAY", "OTHER"]).default("AP"),
-});
+/** Omada `start-adopt` may require the AP’s current web UI credentials if they were changed from defaults. */
+export const deviceAdoptCredentialsSchema = z
+  .object({
+    deviceUsername: z.string().min(1).max(64).optional(),
+    devicePassword: z.string().min(1).max(128).optional(),
+  })
+  .refine(
+    (d) => {
+      const hasU = Boolean(d.deviceUsername?.trim());
+      const hasP = Boolean(d.devicePassword);
+      return (hasU && hasP) || (!hasU && !hasP);
+    },
+    {
+      message: "Provide both deviceUsername and devicePassword for Omada adopt, or leave both empty to use server defaults (OMADA_DEVICE_*).",
+      path: ["devicePassword"],
+    }
+  );
+
+export const addDeviceSchema = z
+  .object({
+    name: z.string().min(1).max(100),
+    mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address format (XX:XX:XX:XX:XX:XX)"),
+    // Site primary keys may be fixed seed ids (e.g. seed-site-1) or Prisma cuids; ownership is enforced in the route.
+    siteId: z.string().min(1).max(128),
+    type: z.enum(["AP", "SWITCH", "GATEWAY", "OTHER"]).default("AP"),
+    deviceUsername: z.string().min(1).max(64).optional(),
+    devicePassword: z.string().min(1).max(128).optional(),
+  })
+  .superRefine((d, ctx) => {
+    const r = deviceAdoptCredentialsSchema.safeParse({
+      deviceUsername: d.deviceUsername,
+      devicePassword: d.devicePassword,
+    });
+    if (!r.success) {
+      for (const iss of r.error.issues) {
+        ctx.addIssue({ ...iss, path: iss.path });
+      }
+    }
+  });
 
 export const updateDeviceSchema = z.object({
   name: z.string().min(1).max(100).optional(),

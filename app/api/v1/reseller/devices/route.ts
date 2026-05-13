@@ -75,6 +75,7 @@ export async function GET(req: NextRequest) {
 /**
  * POST /api/v1/reseller/devices
  * Add a new device by MAC address. Optionally adopt it on Omada Controller.
+ * Optional body: `deviceUsername` + `devicePassword` (both together) when the AP’s web login was changed — passed to Omada `start-adopt`.
  */
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
@@ -177,7 +178,11 @@ export async function POST(req: NextRequest) {
       }
 
       omada.adoptAttempted = true;
-      const adoptRes = await OmadaService.adoptDevice(omadaSiteId, validated.mac.toUpperCase());
+      const adoptCreds =
+        validated.deviceUsername?.trim() && validated.devicePassword
+          ? { username: validated.deviceUsername.trim(), password: validated.devicePassword }
+          : undefined;
+      const adoptRes = await OmadaService.adoptDevice(omadaSiteId, validated.mac.toUpperCase(), adoptCreds);
       adopted = adoptRes.adopted;
       omada.adopted = adoptRes.adopted;
       if (!adoptRes.adopted) {
