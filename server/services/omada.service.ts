@@ -590,9 +590,13 @@ export class OmadaService {
 
     const out: Record<string, unknown>[] = [];
 
-    // 1: Array wlanBand, WPA with cipher (no portal on secured — some builds reject portal fields with WPA)
+    // Omada Open API requires numeric `band` (e.g. 3 = 2.4G+5G); `wlanBand` alone is not enough on many builds.
+    const withBand = (b: Record<string, unknown>) =>
+      OmadaService.omitUndefinedRecord({ ...b, band: bandInt });
+
+    // 1: Array wlanBand + required `band`
     out.push(
-      OmadaService.omitUndefinedRecord({
+      withBand({
         name: input.ssidName,
         wlanBand: wlanBandArr,
         hidden,
@@ -604,9 +608,9 @@ export class OmadaService {
       })
     );
 
-    // 2: Integer wlanBand (common on SDN-style payloads)
+    // 2: Integer wlanBand + `band`
     out.push(
-      OmadaService.omitUndefinedRecord({
+      withBand({
         name: input.ssidName,
         wlanBand: bandInt,
         hidden,
@@ -617,9 +621,23 @@ export class OmadaService {
       })
     );
 
-    // 3: Array band, no pskCipher (controller chooses default cipher)
+    // 3: `band` only (no wlanBand) — some controllers reject duplicate band hints
     out.push(
       OmadaService.omitUndefinedRecord({
+        name: input.ssidName,
+        band: bandInt,
+        hidden,
+        security: securityStr,
+        pskCipher: pwd ? "wpa2-psk" : undefined,
+        pskKey: pwd,
+        vlanId,
+        ...(pwd ? {} : { portalEnable: portalOpen }),
+      })
+    );
+
+    // 4: Array wlanBand, no pskCipher
+    out.push(
+      withBand({
         name: input.ssidName,
         wlanBand: wlanBandArr,
         hidden,
@@ -629,10 +647,10 @@ export class OmadaService {
       })
     );
 
-    // 4: Alternate security string + passphrase key name
+    // 5: Alternate security string + passphrase key name
     if (pwd) {
       out.push(
-        OmadaService.omitUndefinedRecord({
+        withBand({
           name: input.ssidName,
           wlanBand: wlanBandArr,
           hidden,
@@ -643,10 +661,10 @@ export class OmadaService {
       );
     }
 
-    // 5: Integer security (WPA2/WPA3 style) + int band — only when password set
+    // 6: Integer security (WPA2/WPA3 style) + int band — only when password set
     if (pwd) {
       out.push(
-        OmadaService.omitUndefinedRecord({
+        withBand({
           name: input.ssidName,
           wlanBand: bandInt,
           hidden,
