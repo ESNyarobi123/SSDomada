@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, ExternalLink, Save, Globe, Palette, FileText, Layout, Eye } from "lucide-react";
+import { Loader2, ExternalLink, Save, Globe, Palette, FileText, Layout, Eye, Upload } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
+import { authFetch } from "@/lib/auth-client";
 
 type Config = {
   id: string;
@@ -35,6 +36,7 @@ export default function ResellerCaptivePortalPage() {
   const [form, setForm] = useState<Partial<Config> & Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState<null | "logo" | "bgImage">(null);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
@@ -55,6 +57,32 @@ export default function ResellerCaptivePortalPage() {
   useEffect(() => {
     void load();
   }, []);
+
+  async function uploadCaptiveAsset(kind: "logo" | "bgImage", file: File) {
+    setUploading(kind);
+    setErr(null);
+    setOk(null);
+    try {
+      const fd = new FormData();
+      fd.append("kind", kind);
+      fd.append("file", file);
+      const res = await authFetch("/api/v1/reseller/captive-portal/asset", { method: "POST", body: fd });
+      const json = (await res.json()) as { success?: boolean; data?: { url: string }; error?: string };
+      if (!res.ok || json.success === false) {
+        setErr(json.error || "Upload failed");
+        return;
+      }
+      const url = json.data?.url;
+      if (!url) {
+        setErr("Upload failed");
+        return;
+      }
+      setForm((f) => ({ ...f, [kind]: url }));
+      setOk(kind === "logo" ? "Logo uploaded — click Save to apply." : "Background uploaded — click Save to apply.");
+    } finally {
+      setUploading(null);
+    }
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -149,7 +177,7 @@ export default function ResellerCaptivePortalPage() {
             src={previewFull}
             className="w-full h-96 border-0"
             title="Captive portal preview"
-            sandbox="allow-same-origin"
+            sandbox="allow-scripts allow-same-origin allow-forms"
           />
         </div>
       </div>
@@ -184,21 +212,86 @@ export default function ResellerCaptivePortalPage() {
           </div>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Logo URL</label>
-              <input
-                value={(form.logo as string) || ""}
-                onChange={(e) => setForm((f) => ({ ...f, logo: e.target.value || null }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-                placeholder="https://…"
-              />
+              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider inline-flex items-center gap-1.5">
+                <Upload className="w-3.5 h-3.5" />
+                Logo (upload)
+              </label>
+              <div className="mt-1.5 space-y-2">
+                {(form.logo as string) ? (
+                  <div className="flex items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={form.logo as string}
+                      alt="Logo preview"
+                      className="h-14 w-14 rounded-xl object-cover border border-white/10 bg-onyx-900"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, logo: null }))}
+                      className="text-xs font-semibold text-red-300 hover:text-red-200 underline-offset-2 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  disabled={uploading === "logo"}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) void uploadCaptiveAsset("logo", f);
+                  }}
+                  className="block w-full text-xs text-onyx-300 file:mr-3 file:rounded-lg file:border-0 file:bg-gold/15 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-gold hover:file:bg-gold/25"
+                />
+                {uploading === "logo" && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-onyx-500">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading…
+                  </span>
+                )}
+              </div>
             </div>
             <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Background image URL</label>
-              <input
-                value={(form.bgImage as string) || ""}
-                onChange={(e) => setForm((f) => ({ ...f, bgImage: e.target.value || null }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-              />
+              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider inline-flex items-center gap-1.5">
+                <Upload className="w-3.5 h-3.5" />
+                Background image (upload)
+              </label>
+              <div className="mt-1.5 space-y-2">
+                {(form.bgImage as string) ? (
+                  <div className="flex items-center gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={form.bgImage as string}
+                      alt="Background preview"
+                      className="h-14 w-24 rounded-xl object-cover border border-white/10 bg-onyx-900"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, bgImage: null }))}
+                      className="text-xs font-semibold text-red-300 hover:text-red-200 underline-offset-2 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  disabled={uploading === "bgImage"}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) void uploadCaptiveAsset("bgImage", f);
+                  }}
+                  className="block w-full text-xs text-onyx-300 file:mr-3 file:rounded-lg file:border-0 file:bg-gold/15 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-gold hover:file:bg-gold/25"
+                />
+                {uploading === "bgImage" && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-onyx-500">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading…
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>

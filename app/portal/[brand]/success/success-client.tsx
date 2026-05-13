@@ -1,24 +1,31 @@
 "use client";
 
-import { use, useEffect } from "react";
+import { useEffect } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
 
-export default function SuccessPage({ params, searchParams }: {
-  params: Promise<{ brand: string }>;
-  searchParams: Promise<Record<string, string | undefined>>;
-}) {
-  const { brand } = use(params);
-  const sp = use(searchParams);
-  const sessionId = sp.session || sp.sessionId;
+export default function PortalSuccessClient() {
+  const params = useParams();
+  const searchParams = useSearchParams();
+  const brand = (params?.brand as string) || "";
+  const sessionId = searchParams.get("session") || searchParams.get("sessionId") || "";
 
   useEffect(() => {
-    // Wait a moment then redirect back to portal — webhook may still be processing
+    if (!brand) return;
     const t = setTimeout(() => {
-      const url = sessionId ? `/portal/${brand}?session=${sessionId}` : `/portal/${brand}`;
+      const url = sessionId ? `/portal/${brand}?session=${encodeURIComponent(sessionId)}` : `/portal/${brand}`;
       window.location.replace(url);
     }, 1500);
     return () => clearTimeout(t);
   }, [brand, sessionId]);
+
+  if (!brand) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-onyx-950 px-6">
+        <p className="text-onyx-400">Invalid link.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-onyx-950 via-onyx-900 to-onyx-950 px-6">

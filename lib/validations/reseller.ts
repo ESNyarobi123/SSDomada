@@ -137,9 +137,18 @@ export const requestWithdrawalSchema = z.object({
 // Captive Portal
 // ============================================================
 
+/** HTTPS URL or same-origin path from reseller asset upload (`/uploads/captive/...`). */
+const captiveImageString = z
+  .string()
+  .max(2048)
+  .refine(
+    (s) => /^https?:\/\//i.test(s) || /^\/uploads\/captive\/[^/]+\/[^/]+$/.test(s),
+    "Must be a valid URL or an uploaded image path"
+  );
+
 export const updateCaptivePortalSchema = z.object({
-  logo: z.string().url().optional().nullable(),
-  bgImage: z.string().url().optional().nullable(),
+  logo: z.union([z.null(), captiveImageString]).optional(),
+  bgImage: z.union([z.null(), captiveImageString]).optional(),
   bgColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),

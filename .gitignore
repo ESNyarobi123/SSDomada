@@ -57,3 +57,6 @@ prisma/migrations/dev/
 # misc
 *.pem
 .cache/
+
+# user-uploaded captive portal assets (local / ephemeral disk)
+public/uploads/
