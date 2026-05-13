@@ -298,11 +298,12 @@ export class OmadaService {
 
   /**
    * Reboot a device on Omada Controller by MAC
+   * Open API: POST .../sites/{siteId}/devices/{AA-BB-CC-DD-EE-FF}/reboot
    */
   static async rebootDevice(omadaSiteId: string, deviceMac: string) {
-    const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
+    const macHyp = OmadaService.normalizeMacForOmadaDevicePathHyphen(deviceMac);
     return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/reboot`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/devices/${macHyp}/reboot`,
       {}
     );
   }
@@ -365,10 +366,11 @@ export class OmadaService {
   /**
    * Adopt a device into a site on Omada Controller.
    * The device must already be connected to the network and visible to the controller.
-   * On failure, `message` / `errorCode` come from Omada (or the HTTP client) so operators can debug.
    *
-   * If v1 returns 404/Not Found, optionally retries `/openapi/v2/.../adopt` (some deployments differ).
-   * Set `OMADA_ADOPT_TRY_V2=true` to always try v2 after v1 failure.
+   * **Primary:** Omada Open API `POST .../sites/{siteId}/devices/{AA-BB-...}/start-adopt` (documented MAC format).
+   * **Fallback:** legacy `POST .../cmd/devices/{mac}/adopt` (colon or hyphen) for older deployments.
+   *
+   * `start-adopt` returns `errorCode === 0` when the command is accepted; use Omada UI or `listDevices` to confirm adoption finished.
    */
   static async adoptDevice(omadaSiteId: string, deviceMac: string): Promise<{
     adopted: boolean;
@@ -397,7 +399,7 @@ export class OmadaService {
       process.env.OMADA_ADOPT_TRY_V2 === "true" || (!!message && /404|Not Found|"status":\s*404/i.test(message));
 
     const macHyp = OmadaService.normalizeMacForOmadaDevicePathHyphen(deviceMac);
-    const tryAdoptPaths = async (seg: string) => {
+    const tryLegacyCmdAdopt = async (seg: string) => {
       const v1Path = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${seg}/adopt`;
       const v2Path = `/openapi/v2/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${seg}/adopt`;
       const res = (await OmadaClient.post<Record<string, unknown>>(v1Path, {})) as Record<string, unknown>;
@@ -426,21 +428,34 @@ export class OmadaService {
     };
 
     try {
-      const colon = await tryAdoptPaths(macSeg);
-      if (colon.adopted) return colon;
-      const looks404 = /404|Not Found|"status":\s*404/i.test(colon.message || "");
+      const startPath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/devices/${macHyp}/start-adopt`;
+      const adoptBody: Record<string, unknown> = {};
+      if (process.env.OMADA_DEVICE_USERNAME) adoptBody.username = process.env.OMADA_DEVICE_USERNAME;
+      if (process.env.OMADA_DEVICE_PASSWORD) adoptBody.password = process.env.OMADA_DEVICE_PASSWORD;
+
+      const startRes = (await OmadaClient.post<Record<string, unknown>>(startPath, adoptBody)) as Record<string, unknown>;
+      const startParsed = parseResult(startRes);
+      if (startParsed.adopted) return startParsed;
+
+      const legacyColon = await tryLegacyCmdAdopt(macSeg);
+      if (legacyColon.adopted) return legacyColon;
+
+      const looks404 = /404|Not Found|"status":\s*404/i.test(legacyColon.message || "");
       if (looks404 && macHyp !== macSeg) {
-        const hyphen = await tryAdoptPaths(macHyp);
-        if (hyphen.adopted) return hyphen;
-        if (hyphen.message) {
-          return {
-            adopted: false,
-            message: `colon-MAC: ${colon.message || "failed"} · hyphen-MAC: ${hyphen.message}`,
-            errorCode: hyphen.errorCode ?? colon.errorCode,
-          };
-        }
+        const legacyHyphen = await tryLegacyCmdAdopt(macHyp);
+        if (legacyHyphen.adopted) return legacyHyphen;
+        return {
+          adopted: false,
+          message: `start-adopt: ${startParsed.message || "failed"} · legacy colon: ${legacyColon.message || "failed"} · legacy hyphen: ${legacyHyphen.message || "failed"}`,
+          errorCode: legacyHyphen.errorCode ?? legacyColon.errorCode ?? startParsed.errorCode,
+        };
       }
-      return colon;
+
+      return {
+        adopted: false,
+        message: `start-adopt: ${startParsed.message || "failed"} · legacy: ${legacyColon.message || "failed"}`,
+        errorCode: legacyColon.errorCode ?? startParsed.errorCode,
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] adoptDevice failed:", err);
