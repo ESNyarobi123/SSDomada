@@ -328,15 +328,21 @@ export class OmadaService {
   }> {
     try {
       const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
-      const res = await OmadaClient.post<{ errorCode: number; msg?: string }>(
+      const res = await OmadaClient.post<{ errorCode?: number; msg?: string }>(
         `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`,
         {}
       );
       if (res.errorCode === 0) return { adopted: true };
+      const ec = res.errorCode;
+      const msg = res.msg?.trim();
       return {
         adopted: false,
-        errorCode: res.errorCode,
-        message: res.msg?.trim() || `Omada returned errorCode ${res.errorCode}`,
+        errorCode: typeof ec === "number" ? ec : undefined,
+        message:
+          msg ||
+          (typeof ec === "number"
+            ? `Omada returned errorCode ${ec}`
+            : `Omada adopt did not succeed (response: ${JSON.stringify(res).slice(0, 240)})`),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
