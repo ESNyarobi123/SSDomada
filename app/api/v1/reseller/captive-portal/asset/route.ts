@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     const absPath = path.join(absDir, filename);
     await writeFile(absPath, buf);
 
-    const publicUrl = `/uploads/captive/${ctx.resellerId}/${filename}`;
+    const publicUrl = `/api/public/captive/${ctx.resellerId}/${filename}`;
 
     await logResellerAction(ctx.userId, "captive_portal.asset_uploaded", "CaptivePortalConfig", ctx.resellerId, { kind, publicUrl }, getClientIp(req));
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, ExternalLink, Save, Globe, Palette, FileText, Layout, Eye, Upload } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { authFetch } from "@/lib/auth-client";
+import { resolveCaptiveAssetUrl } from "@/lib/portal-assets";
 
 type Config = {
   id: string;
@@ -229,7 +230,7 @@ export default function ResellerCaptivePortalPage() {
                   <div className="flex items-center gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={form.logo as string}
+                      src={resolveCaptiveAssetUrl(form.logo as string) || ""}
                       alt="Logo preview"
                       className="h-14 w-14 rounded-xl object-cover border border-white/10 bg-onyx-900"
                     />
@@ -271,7 +272,7 @@ export default function ResellerCaptivePortalPage() {
                   <div className="flex items-center gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={form.bgImage as string}
+                      src={resolveCaptiveAssetUrl(form.bgImage as string) || ""}
                       alt="Background preview"
                       className="h-14 w-24 rounded-xl object-cover border border-white/10 bg-onyx-900"
                     />

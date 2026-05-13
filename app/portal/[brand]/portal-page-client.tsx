@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { Wifi, CheckCircle2, Loader2, ShieldCheck, Smartphone, Clock, Zap } from "lucide-react";
+import { Wifi, CheckCircle2, Loader2, ShieldCheck, Smartphone, Clock, Zap, ArrowLeft, ChevronRight } from "lucide-react";
+import { resolveCaptiveAssetUrl } from "@/lib/portal-assets";
 
 type Pkg = {
   id: string;
@@ -199,10 +200,15 @@ export default function PortalPageClient() {
 
   if (!data) return null;
   const { portal, packages, client } = data;
+  const isPreview = searchParams.get("preview") === "true";
+  const canPay = Boolean(data.session);
+
+  const logoSrc = resolveCaptiveAssetUrl(portal.logo);
+  const bgSrc = resolveCaptiveAssetUrl(portal.bgImage);
 
   const bgStyle: React.CSSProperties = {
     backgroundColor: portal.bgColor || "#0a0a0a",
-    backgroundImage: portal.bgImage ? `url(${portal.bgImage})` : undefined,
+    backgroundImage: bgSrc ? `url('${bgSrc}')` : undefined,
     backgroundSize: "cover",
     backgroundPosition: "center",
   };
@@ -245,125 +251,166 @@ export default function PortalPageClient() {
 
   return (
     <div className="min-h-screen" style={bgStyle}>
-      <div className="min-h-screen bg-gradient-to-br from-onyx-950/85 via-onyx-900/80 to-onyx-950/85 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
-          <div className="text-center mb-8">
-            {portal.showLogo && portal.logo ? (
-              <img src={portal.logo} alt={portal.companyName} className="w-20 h-20 mx-auto rounded-2xl mb-4 object-cover" />
+      <div className="min-h-screen bg-gradient-to-b from-onyx-950/92 via-onyx-900/88 to-onyx-950/95 backdrop-blur-sm">
+        <div className="max-w-lg mx-auto px-4 py-6 sm:py-8 pb-10">
+          {/* Header */}
+          <div className="text-center mb-6">
+            {portal.showLogo && logoSrc ? (
+              <img
+                src={logoSrc}
+                alt={portal.companyName}
+                className="w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] mx-auto rounded-xl mb-3 object-contain bg-white/[0.06] border border-white/10 p-1"
+              />
             ) : (
-              <div className="w-20 h-20 mx-auto rounded-2xl bg-gold/15 border border-gold/30 flex items-center justify-center mb-4">
-                <Wifi className="w-9 h-9 text-gold" />
+              <div className="w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] mx-auto rounded-xl bg-gold/15 border border-gold/30 flex items-center justify-center mb-3">
+                <Wifi className="w-8 h-8 text-gold" />
               </div>
             )}
-            <h1 className="text-3xl md:text-4xl font-black text-white mb-2">{portal.companyName}</h1>
-            <p className="text-onyx-300">{portal.welcomeText}</p>
+            <h1 className="text-xl sm:text-2xl font-black text-white leading-tight tracking-tight">{portal.companyName}</h1>
+            {portal.welcomeText ? <p className="text-sm text-onyx-400 mt-1.5 leading-snug px-1">{portal.welcomeText}</p> : null}
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-2 mb-8">
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-lg">
-              <ShieldCheck className="w-3.5 h-3.5" /> Secure payment
+          <div className="flex flex-wrap items-center justify-center gap-1.5 mb-6">
+            <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-emerald-400/95 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-md">
+              <ShieldCheck className="w-3 h-3 shrink-0" /> Secure
             </span>
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400 bg-sky-500/10 border border-sky-500/20 px-3 py-1.5 rounded-lg">
-              <Zap className="w-3.5 h-3.5" /> Instant activation
+            <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-sky-400/95 bg-sky-500/10 border border-sky-500/20 px-2 py-1 rounded-md">
+              <Zap className="w-3 h-3 shrink-0" /> Instant
             </span>
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-gold bg-gold/10 border border-gold/20 px-3 py-1.5 rounded-lg">
-              <Smartphone className="w-3.5 h-3.5" /> Mobile money
+            <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-semibold text-gold bg-gold/10 border border-gold/20 px-2 py-1 rounded-md">
+              <Smartphone className="w-3 h-3 shrink-0" /> Mobile money
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            {packages.length === 0 && (
-              <div className="md:col-span-3 text-center py-12 text-onyx-400">No packages available at the moment.</div>
-            )}
-            {packages.map((p) => {
-              const isSelected = selected === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setSelected(p.id)}
-                  className={`text-left rounded-2xl p-5 border-2 transition-all relative ${
-                    isSelected
-                      ? "border-gold bg-gold/10 shadow-lg shadow-gold/10 scale-[1.02]"
-                      : "border-white/[0.08] bg-onyx-900/60 hover:border-gold-30 hover:bg-onyx-900/80"
-                  }`}
-                >
-                  {p.isFeatured && (
-                    <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-gold text-onyx-950 text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase tracking-wider">
-                      Best value
-                    </span>
-                  )}
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <div className="text-lg font-black text-white">{p.name}</div>
-                      <div className="text-xs text-onyx-400 inline-flex items-center gap-1 mt-0.5">
-                        <Clock className="w-3 h-3" /> {formatDuration(p.durationMinutes)}
+          {!selected ? (
+            <>
+              <p className="text-center text-[11px] font-bold uppercase tracking-wider text-onyx-500 mb-2">Choose a package</p>
+              <div className="flex flex-col gap-2">
+                {packages.length === 0 && (
+                  <div className="text-center py-10 text-sm text-onyx-400 rounded-xl border border-white/[0.06] bg-onyx-900/40">
+                    No packages available right now.
+                  </div>
+                )}
+                {packages.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setSelected(p.id);
+                      setErr(null);
+                    }}
+                    className="group w-full text-left rounded-xl border border-white/[0.08] bg-onyx-900/55 hover:border-gold/35 hover:bg-onyx-900/75 transition-all px-3.5 py-3 flex items-center gap-3 active:scale-[0.99]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-white truncate">{p.name}</span>
+                        {p.isFeatured ? (
+                          <span className="shrink-0 text-[9px] font-black uppercase tracking-wide bg-gold text-onyx-950 px-1.5 py-0.5 rounded">
+                            Hot
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] text-onyx-400">
+                        <span className="inline-flex items-center gap-0.5">
+                          <Clock className="w-3 h-3" /> {formatDuration(p.durationMinutes)}
+                        </span>
+                        {p.speedLimitDown ? <span>{Math.round(p.speedLimitDown / 1000)} Mbps</span> : null}
+                        {p.dataLimitMb ? (
+                          <span>{p.dataLimitMb >= 1024 ? `${(p.dataLimitMb / 1024).toFixed(1)} GB` : `${p.dataLimitMb} MB`}</span>
+                        ) : null}
+                        <span>
+                          {p.maxDevices} {p.maxDevices === 1 ? "device" : "devices"}
+                        </span>
                       </div>
                     </div>
-                    {isSelected && <CheckCircle2 className="w-5 h-5 text-gold shrink-0" />}
-                  </div>
-                  <div className="text-2xl font-black text-gold mb-2">{formatTzs(p.price)}</div>
-                  {p.description && <p className="text-xs text-onyx-300 mb-2 line-clamp-2">{p.description}</p>}
-                  <div className="flex flex-wrap gap-1.5 text-[10px]">
-                    {p.speedLimitDown && (
-                      <span className="bg-sky-500/10 text-sky-300 px-2 py-0.5 rounded">{Math.round(p.speedLimitDown / 1000)} Mbps</span>
-                    )}
-                    {p.dataLimitMb && (
-                      <span className="bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded">
-                        {p.dataLimitMb >= 1024 ? `${(p.dataLimitMb / 1024).toFixed(1)}GB` : `${p.dataLimitMb}MB`}
-                      </span>
-                    )}
-                    <span className="bg-white/[0.04] text-onyx-300 px-2 py-0.5 rounded">
-                      {p.maxDevices} {p.maxDevices === 1 ? "device" : "devices"}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      <span className="text-sm font-black text-gold tabular-nums">{formatTzs(p.price)}</span>
+                      <ChevronRight className="w-4 h-4 text-onyx-500 group-hover:text-gold transition-colors" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl border border-gold/25 bg-onyx-900/90 backdrop-blur-xl p-4 sm:p-5 shadow-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected(null);
+                  setErr(null);
+                  setPhone("");
+                }}
+                className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-onyx-400 hover:text-white transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back to packages
+              </button>
 
-          {selected && (
-            <div className="bg-onyx-900/85 backdrop-blur-xl rounded-3xl border border-gold-30 p-6 shadow-2xl">
-              <h2 className="text-xl font-black text-white mb-4">Pay with Mobile Money</h2>
-              {err && <div className="mb-4 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/10 text-sm text-red-200">{err}</div>}
-              <label className="block text-xs font-bold uppercase tracking-wider text-onyx-400 mb-1.5">Phone number</label>
+              {(() => {
+                const p = packages.find((x) => x.id === selected);
+                if (!p) return null;
+                return (
+                  <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5 mb-4">
+                    <div className="text-[10px] uppercase tracking-wider text-onyx-500 font-bold">Selected</div>
+                    <div className="text-sm font-bold text-white">{p.name}</div>
+                    <div className="text-lg font-black text-gold mt-0.5">{formatTzs(p.price)}</div>
+                  </div>
+                );
+              })()}
+
+              <h2 className="text-base font-black text-white mb-1">Pay with mobile money</h2>
+              <p className="text-xs text-onyx-500 mb-3">Enter the number that receives the payment prompt.</p>
+              {!canPay ? (
+                <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/95 leading-relaxed">
+                  {isPreview
+                    ? "Preview only. When guests connect over your Wi‑Fi, they can complete payment here."
+                    : "No device session yet — open this portal from your Omada Wi‑Fi network to pay."}
+                </div>
+              ) : null}
+              {err ? <div className="mb-3 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-xs text-red-200">{err}</div> : null}
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-onyx-500 mb-1">Phone number</label>
               <input
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="0712 345 678"
-                className="w-full rounded-xl border border-gold-10 bg-white/[0.04] px-4 py-3 text-white placeholder:text-onyx-500 focus:border-gold focus:ring-2 focus:ring-gold/20 outline-none transition-all mb-4"
+                className="w-full rounded-xl border border-gold/20 bg-white/[0.04] px-3 py-2.5 text-sm text-white placeholder:text-onyx-600 focus:border-gold focus:ring-2 focus:ring-gold/15 outline-none transition-all mb-3"
                 disabled={paying}
               />
               <button
                 type="button"
                 onClick={submitPayment}
-                disabled={paying || !phone}
-                className="w-full rounded-xl bg-gold text-onyx-950 px-6 py-3.5 font-black text-base shadow-lg shadow-gold/30 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all inline-flex items-center justify-center gap-2"
+                disabled={paying || !phone.trim() || !canPay}
+                className="w-full rounded-xl bg-gold text-onyx-950 px-4 py-3 text-sm font-black shadow-lg shadow-gold/25 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all inline-flex items-center justify-center gap-2"
               >
                 {paying ? (
                   <>
-                    <Loader2 className="w-5 h-5 animate-spin" /> Processing…
+                    <Loader2 className="w-4 h-4 animate-spin" /> Processing…
                   </>
                 ) : (
                   <>
-                    <Zap className="w-5 h-5" /> Pay {formatTzs(packages.find((p) => p.id === selected)?.price || 0)}
+                    <Zap className="w-4 h-4" /> Pay{" "}
+                    {formatTzs(packages.find((p) => p.id === selected)?.price || 0)}
                   </>
                 )}
               </button>
-              <p className="text-[11px] text-onyx-500 text-center mt-3">Powered by Snippe · M-Pesa, Airtel Money, Mixx, Halotel</p>
+              <p className="text-[10px] text-onyx-600 text-center mt-3 leading-relaxed">
+                Snippe · M-Pesa, Airtel Money, Mixx, Halotel
+              </p>
             </div>
           )}
 
-          {portal.termsUrl && (
-            <div className="text-center mt-8 text-xs text-onyx-500">
-              By paying you agree to our{" "}
-              <a href={portal.termsUrl} target="_blank" rel="noopener" className="text-gold underline">
-                terms of service
+          {portal.termsUrl && !selected ? (
+            <div className="text-center mt-8 text-[10px] text-onyx-600 px-2">
+              By continuing you agree to our{" "}
+              <a href={portal.termsUrl} target="_blank" rel="noopener noreferrer" className="text-gold underline underline-offset-2">
+                terms
               </a>
               .
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
