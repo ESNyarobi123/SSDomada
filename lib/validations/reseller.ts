@@ -4,9 +4,12 @@ import { z } from "zod";
 // Pagination
 // ============================================================
 
+/** URLSearchParams.get() returns `null` when absent; treat like undefined so .default() applies. */
+const emptyToUndef = (v: unknown) => (v === null || v === "" ? undefined : v);
+
 export const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  page: z.preprocess(emptyToUndef, z.coerce.number().int().min(1).default(1)),
+  limit: z.preprocess(emptyToUndef, z.coerce.number().int().min(1).max(100).default(20)),
 });
 
 // ============================================================

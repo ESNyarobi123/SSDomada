@@ -12,6 +12,7 @@ import {
   Ban,
   Unplug,
   RefreshCw,
+  Link2,
 } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 
@@ -183,6 +184,25 @@ export default function ResellerDeviceDetailPage() {
           <p className="text-onyx-400 font-mono text-sm mt-1">{device.mac}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {device.site?.omadaSiteId && (
+            <button
+              type="button"
+              disabled={!!busy}
+              onClick={() => {
+                if (
+                  !confirm(
+                    "Try adopting this device on Omada again? The AP should already appear as Pending on this site in Omada (Inform URL set)."
+                  )
+                )
+                  return;
+                void patch("adopt");
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-sky-500/40 px-3 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
+            >
+              <Link2 className="w-4 h-4" />
+              Retry Omada adopt
+            </button>
+          )}
           <button
             type="button"
             disabled={!!busy}
