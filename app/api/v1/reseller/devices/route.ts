@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { paginationSchema, addDeviceSchema } from "@/lib/validations/reseller";
-import { OmadaService } from "@/server/services/omada.service";
+import { OmadaService, type OmadaSiteLinkSource } from "@/server/services/omada.service";
 import { ensureActiveResellerPlan, ensureCapacity } from "@/server/middleware/paywall";
 
 /**
@@ -100,6 +100,34 @@ export async function POST(req: NextRequest) {
     const existingDevice = await prisma.device.findUnique({ where: { mac: validated.mac.toUpperCase() } });
     if (existingDevice) return apiError("Device with this MAC already registered", 409, "MAC_EXISTS");
 
+    // Link SSDomada site → Omada site first (match by name, create on controller, or use stored omadaSiteId)
+    const link = await OmadaService.resolveOmadaSiteIdForResellerSite({
+      id: site.id,
+      name: site.name,
+      omadaSiteId: site.omadaSiteId,
+    });
+
+    let omadaSiteId = link.omadaSiteId;
+    if (omadaSiteId && link.linkSource !== "db") {
+      try {
+        await prisma.site.update({
+          where: { id: site.id },
+          data: { omadaSiteId },
+        });
+      } catch (e: unknown) {
+        console.error("[Reseller Devices POST] Failed to persist omadaSiteId:", e);
+        const code = typeof e === "object" && e !== null && "code" in e ? (e as { code?: string }).code : undefined;
+        if (code === "P2002") {
+          return apiError(
+            "This Omada site is already linked to another SSDomada site. Rename one of the sites or unlink in admin.",
+            409,
+            "OMADA_SITE_ID_CONFLICT"
+          );
+        }
+        return apiError("Failed to save Omada site link.", 500);
+      }
+    }
+
     const device = await prisma.device.create({
       data: {
         resellerId: ctx.resellerId,
@@ -112,13 +140,41 @@ export async function POST(req: NextRequest) {
       include: { site: { select: { name: true, omadaSiteId: true } } },
     });
 
-    // Best-effort adopt on Omada Controller if the site is linked
     let adopted = false;
     let omadaInfo: { ip?: string; model?: string; firmware?: string } = {};
-    if (site.omadaSiteId) {
-      adopted = await OmadaService.adoptDevice(site.omadaSiteId, validated.mac.toUpperCase());
-      // Try to find live device info to enrich the row
-      const live = await OmadaService.findDeviceByMac(site.omadaSiteId, validated.mac);
+    const omada: {
+      siteLinked: boolean;
+      siteLinkSource: OmadaSiteLinkSource;
+      omadaSiteId?: string;
+      adoptAttempted: boolean;
+      adopted: boolean;
+      resolutionNote?: string;
+      message?: string;
+      errorCode?: number;
+    } = {
+      siteLinked: Boolean(omadaSiteId),
+      siteLinkSource: link.linkSource,
+      adoptAttempted: false,
+      adopted: false,
+    };
+
+    if (link.linkMessage) {
+      omada.resolutionNote = link.linkMessage;
+    }
+    if (omadaSiteId) {
+      omada.omadaSiteId = omadaSiteId;
+    }
+
+    if (omadaSiteId) {
+      omada.adoptAttempted = true;
+      const adoptRes = await OmadaService.adoptDevice(omadaSiteId, validated.mac.toUpperCase());
+      adopted = adoptRes.adopted;
+      omada.adopted = adoptRes.adopted;
+      if (!adoptRes.adopted) {
+        omada.message = adoptRes.message;
+        omada.errorCode = adoptRes.errorCode;
+      }
+      const live = await OmadaService.findDeviceByMac(omadaSiteId, validated.mac);
       if (live) {
         omadaInfo = {
           ip: live.ip,
@@ -137,15 +193,28 @@ export async function POST(req: NextRequest) {
           },
         });
       }
+    } else {
+      omada.message =
+        link.linkMessage ||
+        "Could not link this SSDomada site to Omada. Device is saved locally only — check OMADA_* settings and controller connectivity.";
     }
 
     await logResellerAction(ctx.userId, "device.added", "Device", device.id, {
       mac: device.mac,
       name: device.name,
       adopted,
+      omadaSiteId: omadaSiteId || undefined,
+      siteLinkSource: link.linkSource,
+      omadaErrorCode: omada.errorCode,
+      omadaMessage: omada.message || omada.resolutionNote,
     }, getClientIp(req));
 
-    return apiSuccess({ ...device, adopted, ...omadaInfo });
+    const fresh = await prisma.device.findUnique({
+      where: { id: device.id },
+      include: { site: { select: { id: true, name: true, omadaSiteId: true } } },
+    });
+
+    return apiSuccess({ ...fresh!, adopted, omada, ...omadaInfo });
   } catch (error: any) {
     if (error.name === "ZodError") {
       return apiError("Validation failed: " + error.errors.map((e: any) => `${e.path}: ${e.message}`).join(", "), 422, "VALIDATION_ERROR");

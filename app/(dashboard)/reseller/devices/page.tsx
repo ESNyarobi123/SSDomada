@@ -6,7 +6,7 @@ import { Loader2, Plus, Search, Router, Wifi, WifiOff, RefreshCw, X, ArrowRight,
 import { resellerJson } from "@/lib/reseller-fetch";
 import { ChartPanel, Histogram, StackedStrip } from "@/components/reseller/ResellerCharts";
 
-type Site = { id: string; name: string; location: string | null };
+type Site = { id: string; name: string; location: string | null; omadaSiteId?: string | null };
 type DeviceRow = {
   id: string;
   name: string;
@@ -30,6 +30,7 @@ export default function ResellerDevicesPage() {
   const [siteId, setSiteId] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [omadaNotice, setOmadaNotice] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", mac: "", siteId: "", type: "AP" });
@@ -74,6 +75,7 @@ export default function ResellerDevicesPage() {
     }
     setSaving(true);
     setErr(null);
+    setOmadaNotice(null);
     const res = await fetch("/api/v1/reseller/devices", {
       method: "POST",
       credentials: "include",
@@ -94,10 +96,44 @@ export default function ResellerDevicesPage() {
       setSaving(false);
       return;
     }
+    const d = json.data as {
+      adopted?: boolean;
+      omada?: {
+        siteLinked: boolean;
+        siteLinkSource?: string;
+        omadaSiteId?: string;
+        adoptAttempted: boolean;
+        adopted: boolean;
+        resolutionNote?: string;
+        message?: string;
+        errorCode?: number;
+      };
+    };
+    if (d?.omada) {
+      if (!d.omada.siteLinked) {
+        setOmadaNotice(d.omada.message || "This site is not linked to Omada.");
+      } else if (d.omada.adoptAttempted && !d.omada.adopted) {
+        const detail = [d.omada.message, d.omada.errorCode != null ? `errorCode ${d.omada.errorCode}` : ""]
+          .filter(Boolean)
+          .join(" — ");
+        setOmadaNotice(
+          detail
+            ? `Device saved in SSDomada. Omada did not accept adopt: ${detail}. Power on the AP, confirm it appears as pending in Omada, then add again or adopt from Omada.`
+            : "Device saved in SSDomada, but Omada adopt did not succeed. Check Omada Controller and Open API settings."
+        );
+      } else if (d.omada.siteLinkSource && d.omada.siteLinkSource !== "db") {
+        const note = d.omada.resolutionNote ? ` ${d.omada.resolutionNote}` : "";
+        setOmadaNotice(`Site synced to Omada (${d.omada.siteLinkSource}).${note}`.trim());
+      }
+    }
     setShowAdd(false);
     setForm({ name: "", mac: "", siteId: sites[0]?.id || "", type: "AP" });
     setSaving(false);
     void load();
+    void (async () => {
+      const r = await resellerJson<Site[]>("/api/v1/reseller/sites");
+      if (r.ok && r.data) setSites(r.data);
+    })();
   }
 
   const onlinePct = summary.total > 0 ? Math.round((summary.online / summary.total) * 100) : 0;
@@ -128,6 +164,12 @@ export default function ResellerDevicesPage() {
 
       {err && (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>
+      )}
+
+      {omadaNotice && (
+        <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          {omadaNotice}
+        </div>
       )}
 
       {/* ── Summary cards ── */}
@@ -376,7 +418,10 @@ export default function ResellerDevicesPage() {
               </div>
               <h2 className="text-lg font-bold text-white">Add device</h2>
             </div>
-            <p className="text-xs text-onyx-400 mb-5">MAC format: AA:BB:CC:DD:EE:FF</p>
+            <p className="text-xs text-onyx-400 mb-5">
+              MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF. The device must show as pending/discoverable in Omada before
+              adopt can succeed.
+            </p>
             <form onSubmit={addDevice} className="space-y-4">
               <div>
                 <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Site</label>
@@ -390,6 +435,7 @@ export default function ResellerDevicesPage() {
                   {sites.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
+                      {s.omadaSiteId ? " (Omada)" : " (no Omada link)"}
                     </option>
                   ))}
                 </select>

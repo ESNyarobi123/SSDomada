@@ -4,6 +4,8 @@ import type { OmadaSite, OmadaDevice, OmadaClient as OmadaClientType, OmadaApiRe
 
 const OMADA_CONTROLLER_ID = process.env.OMADA_CONTROLLER_ID || "";
 
+export type OmadaSiteLinkSource = "db" | "omada_match" | "omada_created" | "unavailable";
+
 /**
  * Business logic for interacting with Omada Controller
  * Uses OmadaClient for HTTP calls, adds DB persistence.
@@ -86,6 +88,76 @@ export class OmadaService {
   }
 
   /**
+   * Ensure there is an Omada Controller site id for a SSDomada site row.
+   * Uses DB `omadaSiteId` if set; otherwise tries to match an existing Omada site by name,
+   * then creates a new Omada site from `site.name` (requires OMADA_DEVICE_PASSWORD).
+   */
+  static async resolveOmadaSiteIdForResellerSite(site: {
+    id: string;
+    name: string;
+    omadaSiteId: string | null;
+  }): Promise<{
+    omadaSiteId: string | null;
+    linkSource: OmadaSiteLinkSource;
+    linkMessage?: string;
+  }> {
+    if (site.omadaSiteId) {
+      return { omadaSiteId: site.omadaSiteId, linkSource: "db" };
+    }
+
+    if (!process.env.OMADA_DEVICE_PASSWORD) {
+      return {
+        omadaSiteId: null,
+        linkSource: "unavailable",
+        linkMessage:
+          "OMADA_DEVICE_PASSWORD is not configured — cannot auto-create an Omada site. Set it on the SSDomada server or link this site manually in Omada.",
+      };
+    }
+
+    const targetName = site.name.trim();
+    if (!targetName) {
+      return { omadaSiteId: null, linkSource: "unavailable", linkMessage: "Site name is empty." };
+    }
+
+    try {
+      const onOmada = await this.listSites();
+      const match = onOmada.find((s) => s.name.trim().toLowerCase() === targetName.toLowerCase());
+      if (match?.siteId) {
+        const conflict = await prisma.site.findFirst({
+          where: { omadaSiteId: match.siteId, NOT: { id: site.id } },
+        });
+        if (!conflict) {
+          return { omadaSiteId: match.siteId, linkSource: "omada_match" };
+        }
+      }
+    } catch (err) {
+      console.error("[OmadaService] resolveOmadaSiteId listSites failed:", err);
+    }
+
+    const created = await this.createOmadaSiteOnly(targetName);
+    if (created) {
+      return { omadaSiteId: created, linkSource: "omada_created" };
+    }
+
+    const suffix = site.id.slice(-6);
+    const fallback = await this.createOmadaSiteOnly(`${targetName} (${suffix})`);
+    if (fallback) {
+      return {
+        omadaSiteId: fallback,
+        linkSource: "omada_created",
+        linkMessage: `Created Omada site as "${targetName} (${suffix})" because the plain name could not be used.`,
+      };
+    }
+
+    return {
+      omadaSiteId: null,
+      linkSource: "unavailable",
+      linkMessage:
+        "Could not create or match an Omada site. Check OMADA_* env vars, controller reachability, and Open API permissions.",
+    };
+  }
+
+  /**
    * Create a new site on Omada Controller + save to DB (legacy combined helper)
    */
   static async createSite(resellerId: string, name: string, location?: string) {
@@ -115,14 +187,22 @@ export class OmadaService {
       orderBy: { createdAt: "asc" },
     });
     if (existing) {
-      // Heal: if DB site has no omadaSiteId, try to create one now
+      // Heal: if DB site has no omadaSiteId, try to match or create on Omada Controller
       if (!existing.omadaSiteId) {
-        const omadaSiteId = await this.createOmadaSiteOnly(existing.name || companyName);
-        if (omadaSiteId) {
-          return prisma.site.update({
-            where: { id: existing.id },
-            data: { omadaSiteId },
-          });
+        const link = await this.resolveOmadaSiteIdForResellerSite({
+          id: existing.id,
+          name: existing.name,
+          omadaSiteId: null,
+        });
+        if (link.omadaSiteId) {
+          try {
+            return await prisma.site.update({
+              where: { id: existing.id },
+              data: { omadaSiteId: link.omadaSiteId },
+            });
+          } catch {
+            return existing;
+          }
         }
       }
       return existing;
@@ -181,8 +261,9 @@ export class OmadaService {
    * Reboot a device on Omada Controller by MAC
    */
   static async rebootDevice(omadaSiteId: string, deviceMac: string) {
+    const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
     return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${deviceMac}/reboot`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/reboot`,
       {}
     );
   }
@@ -226,20 +307,41 @@ export class OmadaService {
   // ============================================================
 
   /**
+   * Omada OpenAPI device command paths expect MAC as six colon-separated octets (upper hex).
+   * Input may use dashes or no separators (as stored in SSDomada).
+   */
+  static normalizeMacForOmadaDevicePath(mac: string): string {
+    const hex = mac.replace(/[:-]/g, "").toUpperCase();
+    if (!/^[0-9A-F]{12}$/.test(hex)) return mac.trim();
+    return hex.match(/.{2}/g)!.join(":");
+  }
+
+  /**
    * Adopt a device into a site on Omada Controller.
    * The device must already be connected to the network and visible to the controller.
-   * Returns true on success, false if controller failed (DB is still updated by caller).
+   * On failure, `message` / `errorCode` come from Omada (or the HTTP client) so operators can debug.
    */
-  static async adoptDevice(omadaSiteId: string, deviceMac: string): Promise<boolean> {
+  static async adoptDevice(omadaSiteId: string, deviceMac: string): Promise<{
+    adopted: boolean;
+    message?: string;
+    errorCode?: number;
+  }> {
     try {
-      const res = await OmadaClient.post<{ errorCode: number }>(
-        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${deviceMac}/adopt`,
+      const macSeg = OmadaService.normalizeMacForOmadaDevicePath(deviceMac);
+      const res = await OmadaClient.post<{ errorCode: number; msg?: string }>(
+        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/devices/${macSeg}/adopt`,
         {}
       );
-      return res.errorCode === 0;
+      if (res.errorCode === 0) return { adopted: true };
+      return {
+        adopted: false,
+        errorCode: res.errorCode,
+        message: res.msg?.trim() || `Omada returned errorCode ${res.errorCode}`,
+      };
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] adoptDevice failed:", err);
-      return false;
+      return { adopted: false, message };
     }
   }
 
