@@ -566,22 +566,146 @@ export class OmadaService {
     return typeof o.status === "number" && typeof o.error === "string";
   }
 
+  /**
+   * List SSIDs in a WLAN group (Open API). `page` / `pageSize` are required by many Omada builds.
+   */
+  private static async listSsidsInWlanGroup(omadaSiteId: string, wlanId: string): Promise<Record<string, unknown>[]> {
+    for (const apiVer of ["v1", "v2"] as const) {
+      try {
+        const res = await OmadaClient.get<{
+          errorCode?: number;
+          msg?: string;
+          result?: unknown;
+        }>(
+          `/openapi/${apiVer}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/wlans/${wlanId}/ssids?page=1&pageSize=100`
+        );
+        if (typeof res?.errorCode === "number" && res.errorCode !== 0) continue;
+        const rows = OmadaService.coerceOmadaListPayload(res?.result);
+        if (rows.length > 0) return rows;
+      } catch {
+        /* try next */
+      }
+    }
+    return [];
+  }
+
+  private static pickRateLimitIdFromSsidRow(row: Record<string, unknown>): string | null {
+    const rl = row.rateLimit;
+    const srl = row.ssidRateLimit;
+    const a = rl && typeof rl === "object" ? (rl as { rateLimitId?: unknown }).rateLimitId : undefined;
+    const b = srl && typeof srl === "object" ? (srl as { rateLimitId?: unknown }).rateLimitId : undefined;
+    for (const v of [a, b]) {
+      if (typeof v === "string" && v.length > 0) return v;
+    }
+    return null;
+  }
+
+  /** Copy a rate-limit profile id from an existing SSID (Omada often requires this on create). */
+  private static async borrowRateLimitIdFromExistingSsid(
+    omadaSiteId: string,
+    wlanId: string
+  ): Promise<string | null> {
+    const rows = await OmadaService.listSsidsInWlanGroup(omadaSiteId, wlanId);
+    for (const row of rows) {
+      const id = OmadaService.pickRateLimitIdFromSsidRow(row);
+      if (id) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Omada SDN / Open API SSID create shape (see TP-Link Omada Web API docs / community API-REFERENCE).
+   * `band` bitmask: 1 = 2.4 GHz, 2 = 5 GHz, 3 = both.
+   */
+  private static buildSsdnStyleOpenApiCreateSsidBody(
+    input: {
+      ssidName: string;
+      password?: string | null;
+      isHidden?: boolean;
+      band?: "2.4GHz" | "5GHz" | "both";
+      vlanId?: number | null;
+      portalEnabled?: boolean;
+    },
+    rateLimitId: string | null
+  ): Record<string, unknown> {
+    const bandInt = input.band === "both" ? 3 : input.band === "5GHz" ? 2 : 1;
+    const broadcast = !(input.isHidden ?? false);
+    const pwd = input.password || undefined;
+    const vlanId = input.vlanId ?? undefined;
+    const portalOpen = input.portalEnabled ?? !pwd;
+
+    const body: Record<string, unknown> = {
+      name: input.ssidName,
+      band: bandInt,
+      type: 0,
+      guestNetEnable: false,
+      security: pwd ? 3 : 0,
+      broadcast,
+      vlanSetting: vlanId ? { mode: 1, customConfig: { vlanId } } : { mode: 0 },
+      wlanScheduleEnable: false,
+      macFilterEnable: false,
+      wlanId: "",
+      enable11r: false,
+      pmfMode: 3,
+      multiCastSetting: {
+        multiCastEnable: true,
+        arpCastEnable: true,
+        filterEnable: false,
+        ipv6CastEnable: true,
+        channelUtil: 100,
+      },
+      wpaPsk: pwd ? [2, 3] : undefined,
+      deviceType: 1,
+      dhcpOption82: { dhcpEnable: false },
+      greEnable: false,
+      prohibitWifiShare: false,
+      mloEnable: false,
+      rateAndBeaconCtrl: {
+        rate2gCtrlEnable: false,
+        rate5gCtrlEnable: false,
+        rate6gCtrlEnable: false,
+      },
+    };
+
+    if (pwd) {
+      body.pskSetting = {
+        securityKey: pwd,
+        encryptionPsk: 3,
+        versionPsk: 2,
+        gikRekeyPskEnable: false,
+      };
+    } else {
+      body.portalEnable = portalOpen;
+    }
+
+    if (rateLimitId) {
+      body.rateLimit = { rateLimitId };
+      body.ssidRateLimit = { rateLimitId };
+    }
+
+    return OmadaService.omitUndefinedRecord(body);
+  }
+
   /** Omada controller builds differ on SSID create payload — try several Open-API-shaped bodies. */
-  private static buildCreateSsidBodyCandidates(input: {
-    ssidName: string;
-    password?: string | null;
-    isHidden?: boolean;
-    band?: "2.4GHz" | "5GHz" | "both";
-    vlanId?: number | null;
-    portalEnabled?: boolean;
-  }): Record<string, unknown>[] {
+  private static buildCreateSsidBodyCandidates(
+    input: {
+      ssidName: string;
+      password?: string | null;
+      isHidden?: boolean;
+      band?: "2.4GHz" | "5GHz" | "both";
+      vlanId?: number | null;
+      portalEnabled?: boolean;
+    },
+    rateLimitId: string | null
+  ): Record<string, unknown>[] {
     const bandMap: Record<string, number[]> = {
       "2.4GHz": [0],
       "5GHz": [1],
       both: [0, 1],
     };
     const wlanBandArr = bandMap[input.band || "2.4GHz"];
-    const bandInt = input.band === "both" ? 3 : input.band === "5GHz" ? 1 : 2;
+    /** Bitmask for `band` integer field: 1 = 2.4 GHz, 2 = 5 GHz, 3 = both (Omada SDN). */
+    const bandInt = input.band === "both" ? 3 : input.band === "5GHz" ? 2 : 1;
     const hidden = input.isHidden ?? false;
     const pwd = input.password || undefined;
     const securityStr = pwd ? "wpaPersonal" : "none";
@@ -590,11 +714,17 @@ export class OmadaService {
 
     const out: Record<string, unknown>[] = [];
 
+    // 0–1: Full SDN-style payloads (preferred when Open API matches controller Web API shape)
+    out.push(OmadaService.buildSsdnStyleOpenApiCreateSsidBody(input, rateLimitId));
+    if (rateLimitId) {
+      out.push(OmadaService.buildSsdnStyleOpenApiCreateSsidBody(input, null));
+    }
+
     // Omada Open API requires numeric `band` (e.g. 3 = 2.4G+5G); `wlanBand` alone is not enough on many builds.
     const withBand = (b: Record<string, unknown>) =>
       OmadaService.omitUndefinedRecord({ ...b, band: bandInt });
 
-    // 1: Array wlanBand + required `band`
+    // 2: Array wlanBand + required `band`
     out.push(
       withBand({
         name: input.ssidName,
@@ -774,7 +904,9 @@ export class OmadaService {
         return await this.tryQuickCreateSsid(omadaSiteId, input);
       }
 
-      const bodies = OmadaService.buildCreateSsidBodyCandidates(input);
+      const rateLimitId = await OmadaService.borrowRateLimitIdFromExistingSsid(omadaSiteId, wlan.id);
+
+      const bodies = OmadaService.buildCreateSsidBodyCandidates(input, rateLimitId);
       let lastErr: OmadaCreateSsidResult = { omadaSsidId: null, msg: "No SSID create attempts" };
 
       for (const apiVer of ["v1", "v2"] as const) {
