@@ -41,14 +41,15 @@ export const updatePackageSchema = createPackageSchema.partial();
 export const addDeviceSchema = z.object({
   name: z.string().min(1).max(100),
   mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, "Invalid MAC address format (XX:XX:XX:XX:XX:XX)"),
-  siteId: z.string().cuid(),
+  // Site primary keys may be fixed seed ids (e.g. seed-site-1) or Prisma cuids; ownership is enforced in the route.
+  siteId: z.string().min(1).max(128),
   type: z.enum(["AP", "SWITCH", "GATEWAY", "OTHER"]).default("AP"),
 });
 
 export const updateDeviceSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   type: z.enum(["AP", "SWITCH", "GATEWAY", "OTHER"]).optional(),
-  siteId: z.string().cuid().optional(),
+  siteId: z.string().min(1).max(128).optional(),
 });
 
 // ============================================================

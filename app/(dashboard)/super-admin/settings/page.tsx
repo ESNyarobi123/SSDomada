@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw, Shield, Settings, Heart, Key } from "lucide-react";
+import { Loader2, RefreshCw, Shield, Settings, Heart, Key, FlaskConical } from "lucide-react";
 import { adminJson } from "@/lib/admin-fetch";
+import { RESELLER_PLAN_PAYWALL_SETTING_KEY } from "@/lib/platform-settings";
 
 function maskValue(key: string, raw: string): string {
   const lower = key.toLowerCase();
@@ -20,6 +21,7 @@ export default function AdminSettingsPage() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [paywallSaving, setPaywallSaving] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -43,7 +45,32 @@ export default function AdminSettingsPage() {
     void load();
   }, []);
 
-  const entries = Object.entries(settings).sort(([a], [b]) => a.localeCompare(b));
+  const paywallSetting = settings[RESELLER_PLAN_PAYWALL_SETTING_KEY];
+  /** Missing row matches server default: paywall enforced. */
+  const paywallEnforced = paywallSetting === undefined ? true : Boolean(paywallSetting.value);
+
+  async function savePaywallEnforced(next: boolean) {
+    setPaywallSaving(true);
+    setErr(null);
+    const r = await adminJson("/api/v1/admin/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        key: RESELLER_PLAN_PAYWALL_SETTING_KEY,
+        value: next ? "true" : "false",
+        type: "boolean",
+      }),
+    });
+    setPaywallSaving(false);
+    if (!r.ok) {
+      setErr(r.error || "Failed to update reseller plan gate");
+      return;
+    }
+    await load();
+  }
+
+  const entries = Object.entries(settings)
+    .filter(([k]) => k !== RESELLER_PLAN_PAYWALL_SETTING_KEY)
+    .sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -52,7 +79,7 @@ export default function AdminSettingsPage() {
         <div>
           <h1 className="text-3xl font-black text-white md:text-4xl">System settings</h1>
           <p className="mt-1 text-onyx-400">
-            Read-only view of stored keys — updates belong in secure ops flows (values masked when sensitive).
+            Platform toggles and stored keys (sensitive values masked). Turn the reseller plan gate back on before production.
           </p>
         </div>
         <button type="button" onClick={() => void load()} className="inline-flex items-center gap-2 rounded-xl border border-gold-10 bg-gold-10 px-4 py-2.5 text-sm font-semibold text-gold hover:bg-gold-20 transition-all">
@@ -93,6 +120,53 @@ export default function AdminSettingsPage() {
       </div>
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
+
+      {/* ── Reseller plan gate (QA) ── */}
+      {!loading && (
+        <div
+          className={`rounded-2xl border p-5 ${
+            paywallEnforced
+              ? "border-gold-10 bg-gradient-to-br from-gold-5/15 via-transparent to-transparent"
+              : "border-amber-500/35 bg-amber-500/10"
+          }`}
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.06]">
+                <FlaskConical className={`h-5 w-5 ${paywallEnforced ? "text-gold" : "text-amber-300"}`} />
+              </div>
+              <div>
+                <h2 className="font-bold text-white">Reseller plan gate</h2>
+                <p className="mt-1 max-w-xl text-sm text-onyx-400">
+                  When off, resellers can add sites and devices without an active Starter/Growth subscription or plan
+                  limits. Use only for testing; turn on again before launch.
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-3">
+              <span className={`text-xs font-bold uppercase tracking-wider ${paywallEnforced ? "text-emerald-400" : "text-amber-300"}`}>
+                {paywallEnforced ? "Enforced" : "Bypassed"}
+              </span>
+              <button
+                type="button"
+                disabled={paywallSaving}
+                onClick={() => void savePaywallEnforced(!paywallEnforced)}
+                className={`relative inline-flex h-9 w-16 shrink-0 cursor-pointer rounded-full border transition-colors disabled:opacity-50 ${
+                  paywallEnforced ? "border-emerald-500/40 bg-emerald-500/15" : "border-amber-400/50 bg-amber-500/25"
+                }`}
+                aria-pressed={!paywallEnforced}
+                aria-label={paywallEnforced ? "Disable reseller plan gate" : "Enable reseller plan gate"}
+              >
+                <span
+                  className={`pointer-events-none absolute top-1 h-7 w-7 rounded-full bg-white shadow transition-transform ${
+                    paywallEnforced ? "left-1 translate-x-0" : "left-1 translate-x-7"
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Health card ── */}
       {health && (

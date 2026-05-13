@@ -1,5 +1,20 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
+import { RESELLER_PLAN_PAYWALL_SETTING_KEY } from "@/lib/platform-settings";
+
+/**
+ * When `false`, reseller routes skip `ensureActiveResellerPlan` and `ensureCapacity`.
+ * Missing row defaults to enforced (`true`) so production stays protected.
+ */
+export async function isResellerPlanPaywallEnforced(): Promise<boolean> {
+  const row = await prisma.systemSetting.findUnique({
+    where: { key: RESELLER_PLAN_PAYWALL_SETTING_KEY },
+  });
+  if (!row) return true;
+  const v = String(row.value).trim().toLowerCase();
+  if (v === "false" || v === "0" || v === "no" || v === "off") return false;
+  return true;
+}
 
 /**
  * Paywall checks for reseller-scoped API routes.
@@ -32,6 +47,8 @@ function paymentRequired(message: string, hint?: Record<string, unknown>) {
  * otherwise returns a 402 JSON response.
  */
 export async function ensureActiveResellerPlan(resellerId: string) {
+  if (!(await isResellerPlanPaywallEnforced())) return null;
+
   const sub = await (prisma as any).resellerPlanSubscription.findUnique({
     where: { resellerId },
     include: { plan: true },
@@ -67,6 +84,8 @@ export async function ensureActiveResellerPlan(resellerId: string) {
  * Returns 402 if the reseller is at their plan's cap, else null.
  */
 export async function ensureCapacity(resellerId: string, key: CapacityKey) {
+  if (!(await isResellerPlanPaywallEnforced())) return null;
+
   const sub = await (prisma as any).resellerPlanSubscription.findUnique({
     where: { resellerId },
     include: { plan: true },

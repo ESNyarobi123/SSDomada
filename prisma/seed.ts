@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { RESELLER_PLAN_PAYWALL_SETTING_KEY } from "../lib/platform-settings";
 
 const prisma = new PrismaClient();
 
@@ -187,21 +188,24 @@ async function main() {
   // ============================================================
   // 7. SYSTEM SETTINGS
   // ============================================================
-  const settings = [
+  const settings: { key: string; value: string; type?: "string" | "number" | "boolean" | "json" }[] = [
     { key: "platform_name", value: "SSDomada" },
     { key: "platform_currency", value: "TZS" },
-    { key: "default_commission_rate", value: "0.15" },
-    { key: "min_withdrawal_amount", value: "5000" },
-    { key: "max_withdrawal_amount", value: "5000000" },
+    { key: "default_commission_rate", value: "0.15", type: "number" },
+    { key: "min_withdrawal_amount", value: "5000", type: "number" },
+    { key: "max_withdrawal_amount", value: "5000000", type: "number" },
     { key: "support_email", value: "support@ssdomada.com" },
     { key: "support_phone", value: "+255700000000" },
+    // Super-admin can set to false on /super-admin/settings to allow sites/devices without plan (QA only).
+    { key: RESELLER_PLAN_PAYWALL_SETTING_KEY, value: "true", type: "boolean" },
   ];
 
   for (const s of settings) {
+    const type = s.type ?? "string";
     await prisma.systemSetting.upsert({
       where: { key: s.key },
-      update: { value: s.value },
-      create: { key: s.key, value: s.value },
+      update: { value: s.value, type },
+      create: { key: s.key, value: s.value, type },
     });
   }
   console.log(`✅ System Settings: ${settings.length} entries`);
