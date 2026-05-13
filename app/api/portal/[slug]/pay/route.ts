@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import crypto from "crypto";
+import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
@@ -132,8 +133,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
 
     // 10. Call Snippe to create payment
-    const appBase =
-      process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "";
+    const appBase = getPortalPublicBaseUrl();
     const snippePayload = {
       amount: pkg.price,
       currency: reseller.currency,
