@@ -31,6 +31,9 @@ type CaptivePayload = {
   availableTemplates: string[];
 };
 
+const MAX_CAPTIVE_IMAGE_BYTES = 2 * 1024 * 1024;
+const CAPTIVE_IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
+
 export default function ResellerCaptivePortalPage() {
   const [payload, setPayload] = useState<CaptivePayload | null>(null);
   const [form, setForm] = useState<Partial<Config> & Record<string, unknown>>({});
@@ -59,6 +62,10 @@ export default function ResellerCaptivePortalPage() {
   }, []);
 
   async function uploadCaptiveAsset(kind: "logo" | "bgImage", file: File) {
+    if (file.size > MAX_CAPTIVE_IMAGE_BYTES) {
+      setErr("Image must be 2 MB or smaller (PNG, JPEG, WebP, GIF).");
+      return;
+    }
     setUploading(kind);
     setErr(null);
     setOk(null);
@@ -216,6 +223,7 @@ export default function ResellerCaptivePortalPage() {
                 <Upload className="w-3.5 h-3.5" />
                 Logo (upload)
               </label>
+              <p className="mt-0.5 text-[11px] text-onyx-500">PNG, JPEG, WebP, or GIF · max 2 MB</p>
               <div className="mt-1.5 space-y-2">
                 {(form.logo as string) ? (
                   <div className="flex items-center gap-3">
@@ -236,7 +244,7 @@ export default function ResellerCaptivePortalPage() {
                 ) : null}
                 <input
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  accept={CAPTIVE_IMAGE_ACCEPT}
                   disabled={uploading === "logo"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -257,6 +265,7 @@ export default function ResellerCaptivePortalPage() {
                 <Upload className="w-3.5 h-3.5" />
                 Background image (upload)
               </label>
+              <p className="mt-0.5 text-[11px] text-onyx-500">PNG, JPEG, WebP, or GIF · max 2 MB</p>
               <div className="mt-1.5 space-y-2">
                 {(form.bgImage as string) ? (
                   <div className="flex items-center gap-3">
@@ -277,7 +286,7 @@ export default function ResellerCaptivePortalPage() {
                 ) : null}
                 <input
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  accept={CAPTIVE_IMAGE_ACCEPT}
                   disabled={uploading === "bgImage"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];

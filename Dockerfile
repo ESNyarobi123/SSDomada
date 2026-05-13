@@ -45,7 +45,11 @@ RUN adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-RUN mkdir -p ./public/uploads/captive && chown -R nextjs:nodejs ./public/uploads
+
+# Reseller captive assets (POST …/captive-portal/asset) write under public/uploads/captive/{resellerId}/.
+# COPY cannot create empty ignored paths reliably; mkdir as root then hand off ownership to nextjs.
+RUN mkdir -p /app/public/uploads/captive \
+    && chown -R nextjs:nodejs /app/public/uploads
 
 # Copy sharp for image optimization
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/sharp ./node_modules/sharp
