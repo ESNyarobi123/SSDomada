@@ -146,6 +146,7 @@ export async function POST(req: NextRequest) {
       siteLinked: boolean;
       siteLinkSource: OmadaSiteLinkSource;
       omadaSiteId?: string;
+      controllerDeviceListed?: boolean;
       adoptAttempted: boolean;
       adopted: boolean;
       resolutionNote?: string;
@@ -166,6 +167,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (omadaSiteId) {
+      const preview = await OmadaService.findDeviceByMac(omadaSiteId, validated.mac.toUpperCase());
+      omada.controllerDeviceListed = Boolean(preview);
+
+      if (!preview) {
+        const hint =
+          "Omada does not list this MAC on this site yet. Use the AP’s local page (e.g. tplinkeap.net → System → Controller Settings) to set the Controller Inform URL, or fix L2 discovery until the AP appears Pending under this Omada site.";
+        omada.resolutionNote = omada.resolutionNote ? `${omada.resolutionNote} ${hint}` : hint;
+      }
+
       omada.adoptAttempted = true;
       const adoptRes = await OmadaService.adoptDevice(omadaSiteId, validated.mac.toUpperCase());
       adopted = adoptRes.adopted;

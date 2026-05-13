@@ -102,6 +102,7 @@ export default function ResellerDevicesPage() {
         siteLinked: boolean;
         siteLinkSource?: string;
         omadaSiteId?: string;
+        controllerDeviceListed?: boolean;
         adoptAttempted: boolean;
         adopted: boolean;
         resolutionNote?: string;
@@ -116,10 +117,15 @@ export default function ResellerDevicesPage() {
         const detail = [d.omada.message, d.omada.errorCode != null ? `errorCode ${d.omada.errorCode}` : ""]
           .filter(Boolean)
           .join(" — ");
+        const pre =
+          d.omada.controllerDeviceListed === false
+            ? "Omada did not list this MAC on this site yet — fix Inform URL / discovery first. "
+            : "";
         setOmadaNotice(
-          detail
-            ? `Device saved in SSDomada. Omada did not accept adopt: ${detail}. Power on the AP, confirm it appears as pending in Omada, then add again or adopt from Omada.`
-            : "Device saved in SSDomada, but Omada adopt did not succeed. Check Omada Controller and Open API settings."
+          pre +
+            (detail
+              ? `Device saved in SSDomada. Omada did not accept adopt: ${detail}. If you saw 404, deploy the latest code (v2 adopt retry) or confirm Open API path for your controller version.`
+              : "Device saved in SSDomada, but Omada adopt did not succeed. Check Omada Controller and Open API settings.")
         );
       } else if (d.omada.siteLinkSource && d.omada.siteLinkSource !== "db") {
         const note = d.omada.resolutionNote ? ` ${d.omada.resolutionNote}` : "";
@@ -419,8 +425,9 @@ export default function ResellerDevicesPage() {
               <h2 className="text-lg font-bold text-white">Add device</h2>
             </div>
             <p className="text-xs text-onyx-400 mb-5">
-              MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF. The device must show as pending/discoverable in Omada before
-              adopt can succeed.
+              MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF (from the AP Status page or Omada Pending list). The AP must
+              appear under this Omada site as Pending before adopt succeeds. If you hit a device limit (HTTP 402),
+              upgrade the platform plan or ask super-admin to review paywall settings for testing.
             </p>
             <form onSubmit={addDevice} className="space-y-4">
               <div>
