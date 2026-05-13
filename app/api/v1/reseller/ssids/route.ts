@@ -90,12 +90,24 @@ export async function POST(req: NextRequest) {
       ssidName: validated.ssidName,
       siteId: validated.siteId,
       omadaSsidId,
+      omadaPushErrorCode,
+      omadaPushMessage,
     }, getClientIp(req));
+
+    const pushedToOmada = !!omadaSsidId;
+    const omadaPush =
+      site.omadaSiteId != null
+        ? {
+            ok: pushedToOmada,
+            errorCode: pushedToOmada ? null : (omadaPushErrorCode ?? null),
+            message: pushedToOmada ? null : (omadaPushMessage ?? "SSID saved in SSDomada but Omada did not confirm an id (check server logs)."),
+          }
+        : undefined;
 
     return apiSuccess({
       ...ssid,
-      pushedToOmada: !!omadaSsidId,
-      ...(omadaSsidId ? {} : { omadaPushErrorCode, omadaPushMessage }),
+      pushedToOmada,
+      ...(omadaPush ? { omadaPush } : {}),
     });
   } catch (error: any) {
     if (error.name === "ZodError") {

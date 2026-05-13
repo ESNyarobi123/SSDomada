@@ -498,41 +498,54 @@ export class OmadaService {
 
   /** Omada Open API: SSIDs live under a WLAN group (`wlanId`), not `/setting/wlans/ssids`. */
   static async listWlanGroupsForSite(omadaSiteId: string): Promise<{ id: string; name?: string }[]> {
-    try {
-      const res = await OmadaClient.get<{
-        errorCode: number;
-        msg?: string;
-        result?: unknown;
-      }>(
-        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/wlans`
-      );
-      if (typeof res?.errorCode === "number" && res.errorCode !== 0) {
-        console.warn("[OmadaService] listWlanGroupsForSite rejected:", res.errorCode, res.msg);
-        return [];
+    for (const apiVer of ["v1", "v2"] as const) {
+      try {
+        const res = await OmadaClient.get<{
+          errorCode: number;
+          msg?: string;
+          result?: unknown;
+        }>(
+          `/openapi/${apiVer}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/wlans`
+        );
+        if (typeof res?.errorCode === "number" && res.errorCode !== 0) {
+          console.warn("[OmadaService] listWlanGroupsForSite rejected:", apiVer, res.errorCode, res.msg);
+          continue;
+        }
+        const rows = OmadaService.coerceOmadaListPayload(res?.result);
+        const groups = rows
+          .map((row) => ({
+            id: OmadaService.pickWlanGroupId(row),
+            name: typeof row.name === "string" ? row.name : undefined,
+          }))
+          .filter((w) => w.id.length > 0);
+        if (groups.length > 0) return groups;
+      } catch (err) {
+        console.warn("[OmadaService] listWlanGroupsForSite failed:", apiVer, err);
       }
-      const rows = OmadaService.coerceOmadaListPayload(res?.result);
-      return rows
-        .map((row) => ({
-          id: OmadaService.pickWlanGroupId(row),
-          name: typeof row.name === "string" ? row.name : undefined,
-        }))
-        .filter((w) => w.id.length > 0);
-    } catch (err) {
-      console.error("[OmadaService] listWlanGroupsForSite failed:", err);
-      return [];
     }
+    return [];
   }
 
   private static coerceOmadaListPayload(result: unknown): Record<string, unknown>[] {
     if (Array.isArray(result)) return result as Record<string, unknown>[];
-    if (result && typeof result === "object" && Array.isArray((result as { data?: unknown }).data)) {
-      return (result as { data: Record<string, unknown>[] }).data;
+    if (!result || typeof result !== "object") return [];
+    const o = result as Record<string, unknown>;
+    for (const key of ["data", "list", "records", "items", "rows", "wlanGroups", "result"]) {
+      const v = o[key];
+      if (Array.isArray(v) && v.length > 0 && typeof v[0] === "object") {
+        return v as Record<string, unknown>[];
+      }
+    }
+    for (const v of Object.values(o)) {
+      if (Array.isArray(v) && v.length > 0 && typeof v[0] === "object" && v[0] !== null && !Array.isArray(v[0])) {
+        return v as Record<string, unknown>[];
+      }
     }
     return [];
   }
 
   private static pickWlanGroupId(row: Record<string, unknown>): string {
-    for (const k of ["wlanId", "id", "groupId", "wlanGroupId"]) {
+    for (const k of ["wlanId", "wlanGroupId", "groupId", "id", "key", "groupKey"]) {
       const v = row[k];
       if (typeof v === "string" && v.length > 0) return v;
       if (typeof v === "number" && Number.isFinite(v)) return String(v);
@@ -550,10 +563,61 @@ export class OmadaService {
     if (typeof result === "string" && result.length > 0) return result;
     if (result && typeof result === "object") {
       const o = result as Record<string, unknown>;
-      const id = o.id ?? o.ssidId ?? o.ssidID;
+      const id = o.id ?? o.ssidId ?? o.ssidID ?? o.wlanId;
       if (typeof id === "string" && id.length > 0) return id;
+      if (o.data && typeof o.data === "object") {
+        const d = o.data as Record<string, unknown>;
+        const id2 = d.id ?? d.ssidId ?? d.ssidID;
+        if (typeof id2 === "string" && id2.length > 0) return id2;
+      }
     }
     return null;
+  }
+
+  private static omitUndefinedRecord(obj: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
+  }
+
+  /**
+   * Omada "quick create SSID" (no wlanId). Used when the site has no WLAN group list yet.
+   */
+  private static async tryQuickCreateSsid(
+    omadaSiteId: string,
+    input: {
+      ssidName: string;
+      password?: string | null;
+      isHidden?: boolean;
+      band?: "2.4GHz" | "5GHz" | "both";
+    }
+  ): Promise<OmadaCreateSsidResult> {
+    let last: OmadaCreateSsidResult = { omadaSsidId: null, msg: "quick-create-ssid: no compatible response" };
+    for (const apiVer of ["v1", "v2"] as const) {
+      const path = `/openapi/${apiVer}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/quick-create-ssid`;
+      const attempts: Record<string, unknown>[] = [
+        { name: input.ssidName, password: input.password || "" },
+        { name: input.ssidName, wlanPassword: input.password || "" },
+        { ssidName: input.ssidName, password: input.password || "" },
+      ];
+      for (const raw of attempts) {
+        try {
+          const res = await OmadaClient.post<{ errorCode: number; msg?: string; result?: unknown }>(path, raw);
+          if (res.errorCode === 0) {
+            const id = OmadaService.extractOmadaEntityIdFromPostResult(res.result);
+            if (id) return { omadaSsidId: id };
+            last = {
+              omadaSsidId: null,
+              errorCode: 0,
+              msg: res.msg || "Omada returned success but no SSID id in quick-create response",
+            };
+          } else {
+            last = { omadaSsidId: null, errorCode: res.errorCode, msg: res.msg };
+          }
+        } catch (err) {
+          last = { omadaSsidId: null, msg: err instanceof Error ? err.message : String(err) };
+        }
+      }
+    }
+    return last;
   }
 
   /**
@@ -585,12 +649,11 @@ export class OmadaService {
       const groups = await this.listWlanGroupsForSite(omadaSiteId);
       const wlan = this.pickDefaultWlanGroup(groups);
       if (!wlan) {
-        const msg = "No WLAN group returned by Omada for this site — cannot attach an SSID.";
-        console.error("[OmadaService] createSsid:", msg);
-        return { omadaSsidId: null, errorCode: -2, msg };
+        console.warn("[OmadaService] createSsid: no WLAN groups from Omada; trying quick-create-ssid");
+        return await this.tryQuickCreateSsid(omadaSiteId, input);
       }
 
-      const body: Record<string, unknown> = {
+      const body = OmadaService.omitUndefinedRecord({
         name: input.ssidName,
         wlanBand,
         hidden: input.isHidden ?? false,
@@ -599,7 +662,7 @@ export class OmadaService {
         pskKey: input.password || undefined,
         vlanId: input.vlanId ?? undefined,
         portalEnable: input.portalEnabled ?? !input.password,
-      };
+      });
 
       const res = await OmadaClient.post<{
         errorCode: number;
@@ -614,9 +677,17 @@ export class OmadaService {
 
       const omadaSsidId = this.extractOmadaEntityIdFromPostResult(res.result);
       if (!omadaSsidId) {
-        console.warn("[OmadaService] createSsid: errorCode 0 but no id in result:", JSON.stringify(res.result)?.slice(0, 500));
+        const snippet = JSON.stringify(res.result)?.slice(0, 800);
+        console.warn("[OmadaService] createSsid: errorCode 0 but no id in result:", snippet);
+        return {
+          omadaSsidId: null,
+          errorCode: 0,
+          msg: snippet
+            ? `Omada accepted the request but no SSID id was found in the response (result=${snippet})`
+            : "Omada accepted the request but returned an empty result for SSID id",
+        };
       }
-      return { omadaSsidId: omadaSsidId || null };
+      return { omadaSsidId };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] createSsid failed:", err);
