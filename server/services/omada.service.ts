@@ -545,7 +545,7 @@ export class OmadaService {
   }
 
   private static pickWlanGroupId(row: Record<string, unknown>): string {
-    for (const k of ["wlanId", "wlanGroupId", "groupId", "id", "key", "groupKey"]) {
+    for (const k of ["wlanId", "wlanGroupKey", "wlanGroupId", "groupId", "key", "groupKey", "id"]) {
       const v = row[k];
       if (typeof v === "string" && v.length > 0) return v;
       if (typeof v === "number" && Number.isFinite(v)) return String(v);
@@ -557,6 +557,114 @@ export class OmadaService {
     if (!groups.length) return null;
     const byName = groups.find((g) => /default/i.test(g.name || ""));
     return byName || groups[0];
+  }
+
+  /** Spring MVC JSON error wrapper (HTTP 4xx/5xx) instead of `{ errorCode }`. */
+  private static isSpringJsonError(data: unknown): data is { status: number; error?: string; path?: string; message?: string } {
+    if (!data || typeof data !== "object") return false;
+    const o = data as Record<string, unknown>;
+    return typeof o.status === "number" && typeof o.error === "string";
+  }
+
+  /** Omada controller builds differ on SSID create payload — try several Open-API-shaped bodies. */
+  private static buildCreateSsidBodyCandidates(input: {
+    ssidName: string;
+    password?: string | null;
+    isHidden?: boolean;
+    band?: "2.4GHz" | "5GHz" | "both";
+    vlanId?: number | null;
+    portalEnabled?: boolean;
+  }): Record<string, unknown>[] {
+    const bandMap: Record<string, number[]> = {
+      "2.4GHz": [0],
+      "5GHz": [1],
+      both: [0, 1],
+    };
+    const wlanBandArr = bandMap[input.band || "2.4GHz"];
+    const bandInt = input.band === "both" ? 3 : input.band === "5GHz" ? 1 : 2;
+    const hidden = input.isHidden ?? false;
+    const pwd = input.password || undefined;
+    const securityStr = pwd ? "wpaPersonal" : "none";
+    const vlanId = input.vlanId ?? undefined;
+    const portalOpen = input.portalEnabled ?? !pwd;
+
+    const out: Record<string, unknown>[] = [];
+
+    // 1: Array wlanBand, WPA with cipher (no portal on secured — some builds reject portal fields with WPA)
+    out.push(
+      OmadaService.omitUndefinedRecord({
+        name: input.ssidName,
+        wlanBand: wlanBandArr,
+        hidden,
+        security: securityStr,
+        pskCipher: pwd ? "wpa2-psk" : undefined,
+        pskKey: pwd,
+        vlanId,
+        ...(pwd ? {} : { portalEnable: portalOpen }),
+      })
+    );
+
+    // 2: Integer wlanBand (common on SDN-style payloads)
+    out.push(
+      OmadaService.omitUndefinedRecord({
+        name: input.ssidName,
+        wlanBand: bandInt,
+        hidden,
+        security: securityStr,
+        pskCipher: pwd ? "wpa2-psk" : undefined,
+        pskKey: pwd,
+        vlanId,
+      })
+    );
+
+    // 3: Array band, no pskCipher (controller chooses default cipher)
+    out.push(
+      OmadaService.omitUndefinedRecord({
+        name: input.ssidName,
+        wlanBand: wlanBandArr,
+        hidden,
+        security: securityStr,
+        pskKey: pwd,
+        vlanId,
+      })
+    );
+
+    // 4: Alternate security string + passphrase key name
+    if (pwd) {
+      out.push(
+        OmadaService.omitUndefinedRecord({
+          name: input.ssidName,
+          wlanBand: wlanBandArr,
+          hidden,
+          security: "wpapsk",
+          passphrase: pwd,
+          vlanId,
+        })
+      );
+    }
+
+    // 5: Integer security (WPA2/WPA3 style) + int band — only when password set
+    if (pwd) {
+      out.push(
+        OmadaService.omitUndefinedRecord({
+          name: input.ssidName,
+          wlanBand: bandInt,
+          hidden,
+          security: 3,
+          pskKey: pwd,
+          vlanId,
+        })
+      );
+    }
+
+    // Dedupe identical JSON shapes
+    const seen = new Set<string>();
+    return out.filter((b) => {
+      const k = JSON.stringify(b);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
   }
 
   private static extractOmadaEntityIdFromPostResult(result: unknown): string | null {
@@ -640,16 +748,6 @@ export class OmadaService {
       portalEnabled?: boolean; // attach captive portal
     }
   ): Promise<OmadaCreateSsidResult> {
-    const bandMap: Record<string, number[]> = {
-      "2.4GHz": [0], // 2.4G
-      "5GHz": [1], // 5G
-      both: [0, 1],
-    };
-    const wlanBand = bandMap[input.band || "2.4GHz"];
-    const securityMode = input.password ? "wpaPersonal" : "none";
-
-    const base = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}`;
-
     try {
       const groups = await this.listWlanGroupsForSite(omadaSiteId);
       const wlan = this.pickDefaultWlanGroup(groups);
@@ -658,48 +756,60 @@ export class OmadaService {
         return await this.tryQuickCreateSsid(omadaSiteId, input);
       }
 
-      const body = OmadaService.omitUndefinedRecord({
-        name: input.ssidName,
-        wlanBand,
-        hidden: input.isHidden ?? false,
-        security: securityMode,
-        pskCipher: input.password ? "wpa2-psk" : undefined,
-        pskKey: input.password || undefined,
-        vlanId: input.vlanId ?? undefined,
-        portalEnable: input.portalEnabled ?? !input.password,
-      });
+      const bodies = OmadaService.buildCreateSsidBodyCandidates(input);
+      let lastErr: OmadaCreateSsidResult = { omadaSsidId: null, msg: "No SSID create attempts" };
 
-      const res = await OmadaClient.post<{
-        errorCode?: number;
-        msg?: string;
-        result?: unknown;
-      }>(`${base}/wireless-network/wlans/${wlan.id}/ssids`, body);
+      for (const apiVer of ["v1", "v2"] as const) {
+        const path = `/openapi/${apiVer}/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/wlans/${wlan.id}/ssids`;
+        for (let i = 0; i < bodies.length; i++) {
+          const body = bodies[i];
+          const res = await OmadaClient.post<{
+            errorCode?: number;
+            msg?: string;
+            result?: unknown;
+            status?: number;
+            error?: string;
+            path?: string;
+          }>(path, body);
 
-      const omadaSsidIdEarly = this.extractOmadaEntityIdFromPostResult(res?.result);
-      if (omadaSsidIdEarly) {
-        return { omadaSsidId: omadaSsidIdEarly };
+          const idEarly = OmadaService.extractOmadaEntityIdFromPostResult(res?.result);
+          if (idEarly) {
+            return { omadaSsidId: idEarly };
+          }
+
+          const code = res?.errorCode;
+          if (code === 0) {
+            const snippet = JSON.stringify(res.result)?.slice(0, 800);
+            lastErr = {
+              omadaSsidId: null,
+              errorCode: 0,
+              msg: snippet
+                ? `Omada accepted the request but no SSID id was found (result=${snippet})`
+                : "Omada accepted the request but returned an empty result for SSID id",
+            };
+            continue;
+          }
+
+          if (OmadaService.isSpringJsonError(res)) {
+            lastErr = {
+              omadaSsidId: null,
+              errorCode: res.status,
+              msg: `${res.error || "HTTP"} ${res.status}: ${res.message || res.path || ""}`.trim(),
+            };
+            continue;
+          }
+
+          const raw = JSON.stringify(res).slice(0, 900);
+          lastErr = {
+            omadaSsidId: null,
+            errorCode: typeof code === "number" ? code : -1,
+            msg: res.msg || (typeof code === "number" ? `Omada errorCode=${code}` : `Unexpected Omada response: ${raw}`),
+          };
+        }
       }
 
-      const code = res?.errorCode;
-      if (code === 0) {
-        const snippet = JSON.stringify(res.result)?.slice(0, 800);
-        console.warn("[OmadaService] createSsid: errorCode 0 but no id in result:", snippet);
-        return {
-          omadaSsidId: null,
-          errorCode: 0,
-          msg: snippet
-            ? `Omada accepted the request but no SSID id was found in the response (result=${snippet})`
-            : "Omada accepted the request but returned an empty result for SSID id",
-        };
-      }
-
-      const raw = JSON.stringify(res).slice(0, 900);
-      console.error("[OmadaService] createSsid rejected or ambiguous:", code, res.msg, { wlanId: wlan.id, raw });
-      return {
-        omadaSsidId: null,
-        errorCode: typeof code === "number" ? code : -1,
-        msg: res.msg || (typeof code === "number" ? `Omada errorCode=${code}` : `Unexpected Omada response (expected errorCode:0 and id): ${raw}`),
-      };
+      console.error("[OmadaService] createSsid: all body variants failed for wlan", wlan.id);
+      return lastErr;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] createSsid failed:", err);
