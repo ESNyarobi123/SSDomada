@@ -54,8 +54,10 @@ export async function POST(req: NextRequest) {
 
     // Best-effort push SSID to Omada Controller if site is linked
     let omadaSsidId: string | null = null;
+    let omadaPushErrorCode: number | undefined;
+    let omadaPushMessage: string | undefined;
     if (site.omadaSiteId) {
-      omadaSsidId = await OmadaService.createSsid(site.omadaSiteId, {
+      const push = await OmadaService.createSsid(site.omadaSiteId, {
         ssidName: validated.ssidName,
         password: validated.password,
         isHidden: validated.isHidden,
@@ -63,6 +65,11 @@ export async function POST(req: NextRequest) {
         vlanId: validated.vlanId,
         portalEnabled: !validated.password, // open SSIDs use captive portal
       });
+      omadaSsidId = push.omadaSsidId;
+      if (!push.omadaSsidId) {
+        omadaPushErrorCode = push.errorCode;
+        omadaPushMessage = push.msg;
+      }
     }
 
     const ssid = await prisma.ssidConfig.create({
@@ -85,7 +92,11 @@ export async function POST(req: NextRequest) {
       omadaSsidId,
     }, getClientIp(req));
 
-    return apiSuccess({ ...ssid, pushedToOmada: !!omadaSsidId });
+    return apiSuccess({
+      ...ssid,
+      pushedToOmada: !!omadaSsidId,
+      ...(omadaSsidId ? {} : { omadaPushErrorCode, omadaPushMessage }),
+    });
   } catch (error: any) {
     if (error.name === "ZodError") {
       return apiError("Validation failed: " + error.errors.map((e: any) => `${e.path}: ${e.message}`).join(", "), 422);

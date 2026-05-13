@@ -6,6 +6,13 @@ const OMADA_CONTROLLER_ID = process.env.OMADA_CONTROLLER_ID || "";
 
 export type OmadaSiteLinkSource = "db" | "omada_match" | "omada_created" | "unavailable";
 
+/** Outcome of Omada Open API SSID create (`createSsid`). */
+export type OmadaCreateSsidResult = {
+  omadaSsidId: string | null;
+  errorCode?: number;
+  msg?: string;
+};
+
 /**
  * Business logic for interacting with Omada Controller
  * Uses OmadaClient for HTTP calls, adds DB persistence.
@@ -489,9 +496,69 @@ export class OmadaService {
   // SSID / WLAN
   // ============================================================
 
+  /** Omada Open API: SSIDs live under a WLAN group (`wlanId`), not `/setting/wlans/ssids`. */
+  static async listWlanGroupsForSite(omadaSiteId: string): Promise<{ id: string; name?: string }[]> {
+    try {
+      const res = await OmadaClient.get<{
+        errorCode: number;
+        msg?: string;
+        result?: unknown;
+      }>(
+        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/wireless-network/wlans`
+      );
+      if (typeof res?.errorCode === "number" && res.errorCode !== 0) {
+        console.warn("[OmadaService] listWlanGroupsForSite rejected:", res.errorCode, res.msg);
+        return [];
+      }
+      const rows = OmadaService.coerceOmadaListPayload(res?.result);
+      return rows
+        .map((row) => ({
+          id: OmadaService.pickWlanGroupId(row),
+          name: typeof row.name === "string" ? row.name : undefined,
+        }))
+        .filter((w) => w.id.length > 0);
+    } catch (err) {
+      console.error("[OmadaService] listWlanGroupsForSite failed:", err);
+      return [];
+    }
+  }
+
+  private static coerceOmadaListPayload(result: unknown): Record<string, unknown>[] {
+    if (Array.isArray(result)) return result as Record<string, unknown>[];
+    if (result && typeof result === "object" && Array.isArray((result as { data?: unknown }).data)) {
+      return (result as { data: Record<string, unknown>[] }).data;
+    }
+    return [];
+  }
+
+  private static pickWlanGroupId(row: Record<string, unknown>): string {
+    for (const k of ["wlanId", "id", "groupId", "wlanGroupId"]) {
+      const v = row[k];
+      if (typeof v === "string" && v.length > 0) return v;
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    }
+    return "";
+  }
+
+  private static pickDefaultWlanGroup(groups: { id: string; name?: string }[]): { id: string; name?: string } | null {
+    if (!groups.length) return null;
+    const byName = groups.find((g) => /default/i.test(g.name || ""));
+    return byName || groups[0];
+  }
+
+  private static extractOmadaEntityIdFromPostResult(result: unknown): string | null {
+    if (typeof result === "string" && result.length > 0) return result;
+    if (result && typeof result === "object") {
+      const o = result as Record<string, unknown>;
+      const id = o.id ?? o.ssidId ?? o.ssidID;
+      if (typeof id === "string" && id.length > 0) return id;
+    }
+    return null;
+  }
+
   /**
-   * Create a wireless network (SSID) on a site.
-   * Returns the omadaSsidId on success, null otherwise.
+   * Create a wireless network (SSID) on a site (Omada Open API).
+   * Picks the default WLAN group (name contains "Default" if present, else the first group).
    */
   static async createSsid(
     omadaSiteId: string,
@@ -503,7 +570,7 @@ export class OmadaService {
       vlanId?: number | null;
       portalEnabled?: boolean; // attach captive portal
     }
-  ): Promise<string | null> {
+  ): Promise<OmadaCreateSsidResult> {
     const bandMap: Record<string, number[]> = {
       "2.4GHz": [0], // 2.4G
       "5GHz": [1], // 5G
@@ -512,37 +579,75 @@ export class OmadaService {
     const wlanBand = bandMap[input.band || "2.4GHz"];
     const securityMode = input.password ? "wpaPersonal" : "none";
 
+    const base = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}`;
+
     try {
-      const res = await OmadaClient.post<{ errorCode: number; result: { id: string } }>(
-        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/wlans/ssids`,
-        {
-          name: input.ssidName,
-          wlanBand,
-          hidden: input.isHidden ?? false,
-          security: securityMode,
-          pskCipher: input.password ? "wpa2-psk" : undefined,
-          pskKey: input.password || undefined,
-          vlanId: input.vlanId ?? undefined,
-          portalEnable: input.portalEnabled ?? !input.password, // open SSIDs default to captive portal
-        }
-      );
-      if (res.errorCode !== 0) return null;
-      return res.result?.id || null;
+      const groups = await this.listWlanGroupsForSite(omadaSiteId);
+      const wlan = this.pickDefaultWlanGroup(groups);
+      if (!wlan) {
+        const msg = "No WLAN group returned by Omada for this site — cannot attach an SSID.";
+        console.error("[OmadaService] createSsid:", msg);
+        return { omadaSsidId: null, errorCode: -2, msg };
+      }
+
+      const body: Record<string, unknown> = {
+        name: input.ssidName,
+        wlanBand,
+        hidden: input.isHidden ?? false,
+        security: securityMode,
+        pskCipher: input.password ? "wpa2-psk" : undefined,
+        pskKey: input.password || undefined,
+        vlanId: input.vlanId ?? undefined,
+        portalEnable: input.portalEnabled ?? !input.password,
+      };
+
+      const res = await OmadaClient.post<{
+        errorCode: number;
+        msg?: string;
+        result?: unknown;
+      }>(`${base}/wireless-network/wlans/${wlan.id}/ssids`, body);
+
+      if (res.errorCode !== 0) {
+        console.error("[OmadaService] createSsid rejected:", res.errorCode, res.msg, { wlanId: wlan.id, bodyKeys: Object.keys(body) });
+        return { omadaSsidId: null, errorCode: res.errorCode, msg: res.msg };
+      }
+
+      const omadaSsidId = this.extractOmadaEntityIdFromPostResult(res.result);
+      if (!omadaSsidId) {
+        console.warn("[OmadaService] createSsid: errorCode 0 but no id in result:", JSON.stringify(res.result)?.slice(0, 500));
+      }
+      return { omadaSsidId: omadaSsidId || null };
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error("[OmadaService] createSsid failed:", err);
-      return null;
+      return { omadaSsidId: null, msg: message };
     }
   }
 
   /**
    * Delete an SSID on Omada Controller.
+   * Tries each WLAN group until one succeeds (SSID ids are scoped per group in Open API).
    */
   static async deleteSsid(omadaSiteId: string, omadaSsidId: string): Promise<boolean> {
+    const base = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}`;
+
     try {
-      const res = await OmadaClient.delete<{ errorCode: number }>(
-        `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/setting/wlans/ssids/${omadaSsidId}`
+      const groups = await this.listWlanGroupsForSite(omadaSiteId);
+      for (const w of groups) {
+        try {
+          const res = await OmadaClient.delete<{ errorCode: number; msg?: string }>(
+            `${base}/wireless-network/wlans/${w.id}/ssids/${omadaSsidId}`
+          );
+          if (res.errorCode === 0) return true;
+        } catch {
+          /* try next wlan */
+        }
+      }
+
+      const legacy = await OmadaClient.delete<{ errorCode: number }>(
+        `${base}/setting/wlans/ssids/${omadaSsidId}`
       );
-      return res.errorCode === 0;
+      return legacy.errorCode === 0;
     } catch (err) {
       console.error("[OmadaService] deleteSsid failed:", err);
       return false;
