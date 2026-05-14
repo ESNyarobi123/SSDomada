@@ -12,6 +12,8 @@ import {
   Router,
   ExternalLink,
   Copy,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { adminJson } from "@/lib/admin-fetch";
 import type { PortalSetupSnapshot } from "@/lib/portal-setup-types";
@@ -45,6 +47,8 @@ export default function SuperAdminPortalRequestsPage() {
   const [data, setData] = useState<ListPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** Request ids with details panel expanded */
+  const [openIds, setOpenIds] = useState<Set<string>>(() => new Set());
 
   const load = useCallback(async () => {
     setErr(null);
@@ -61,6 +65,19 @@ export default function SuperAdminPortalRequestsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setOpenIds(new Set());
+  }, [filter]);
+
+  function toggleRequestOpen(id: string) {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function setStatus(id: string, status: "DONE" | "DISMISSED") {
     setBusyId(id);
@@ -155,22 +172,46 @@ export default function SuperAdminPortalRequestsPage() {
           No requests in this view.
         </div>
       ) : (
-        <ul className="space-y-5" role="list">
-          {list.map((req) => (
+        <ul className="space-y-4" role="list">
+          {list.map((req) => {
+            const expanded = openIds.has(req.id);
+            return (
             <li
               key={req.id}
-              className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.05] to-transparent overflow-hidden"
+              className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.05] to-transparent overflow-hidden shadow-sm shadow-black/20"
             >
-              <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-white/[0.06] bg-white/[0.02]">
-                <div className="min-w-0">
-                  <p className="text-lg font-bold text-white truncate">{req.reseller.companyName}</p>
-                  <p className="text-sm text-onyx-400 truncate">
-                    {req.reseller.user.email}
-                    {req.reseller.user.name ? ` · ${req.reseller.user.name}` : ""}
-                  </p>
-                  <p className="text-xs text-gold/90 mt-1 font-mono">/{req.reseller.brandSlug}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-stretch sm:min-h-[4.5rem]">
+                <button
+                  type="button"
+                  onClick={() => toggleRequestOpen(req.id)}
+                  aria-expanded={expanded}
+                  aria-controls={`portal-req-details-${req.id}`}
+                  id={`portal-req-trigger-${req.id}`}
+                  className="flex flex-1 min-w-0 items-center gap-3 px-4 py-3.5 text-left hover:bg-white/[0.05] active:bg-white/[0.08] transition-colors sm:py-4"
+                >
+                  <span className="shrink-0 text-onyx-400" aria-hidden>
+                    {expanded ? (
+                      <ChevronDown className="w-5 h-5" />
+                    ) : (
+                      <ChevronRight className="w-5 h-5" />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-lg font-bold text-white tracking-tight truncate">
+                      {req.reseller.companyName}
+                    </p>
+                    <p className="text-sm text-onyx-400 truncate mt-0.5">
+                      <span className="text-onyx-300">{req.reseller.user.email}</span>
+                      {req.reseller.user.name ? (
+                        <>
+                          <span className="text-onyx-600"> · </span>
+                          <span className="text-white/90">{req.reseller.user.name}</span>
+                        </>
+                      ) : null}
+                    </p>
+                  </div>
+                </button>
+                <div className="flex flex-wrap items-center gap-2 px-4 pb-3 sm:pb-0 sm:py-3 sm:pr-4 sm:pl-0 sm:border-l sm:border-white/[0.06] sm:justify-end shrink-0 bg-white/[0.02] sm:bg-transparent">
                   <span
                     className={`text-xs font-bold uppercase px-2.5 py-1 rounded-lg ${
                       req.status === "PENDING"
@@ -207,7 +248,13 @@ export default function SuperAdminPortalRequestsPage() {
                 </div>
               </div>
 
-              <div className="p-5 space-y-4">
+              {expanded ? (
+              <div
+                id={`portal-req-details-${req.id}`}
+                role="region"
+                aria-labelledby={`portal-req-trigger-${req.id}`}
+                className="p-5 space-y-4 border-t border-white/[0.06] bg-black/20"
+              >
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -235,6 +282,9 @@ export default function SuperAdminPortalRequestsPage() {
                     Reseller profile
                   </Link>
                 </div>
+                <p className="text-xs font-mono text-gold/80">
+                  Brand slug: <span className="text-gold">/{req.reseller.brandSlug}</span>
+                </p>
 
                 {req.note ? (
                   <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
@@ -347,8 +397,10 @@ export default function SuperAdminPortalRequestsPage() {
                   {req.resolvedAt ? ` · Resolved ${new Date(req.resolvedAt).toLocaleString()}` : ""}
                 </p>
               </div>
+              ) : null}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

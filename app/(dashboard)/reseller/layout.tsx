@@ -276,7 +276,7 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
             </div>
           )}
         </div>
-        <nav className="flex-1 overflow-x-hidden overflow-y-auto p-2 pt-3 custom-scrollbar">
+        <nav className="min-h-0 flex-1 scrollable-no-scrollbar overflow-x-hidden overflow-y-auto p-2 pt-3 pb-1">
           <NavLinks collapsed={collapsed} />
         </nav>
         <div className="p-2 border-t border-white/[0.04]">
@@ -306,7 +306,7 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
         </header>
         {open && (
           <div className="lg:hidden fixed inset-0 top-[52px] z-30 bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)}>
-            <div className="border-b border-white/[0.06] bg-onyx-900/95 backdrop-blur-xl px-4 py-4 max-h-[70vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b border-white/[0.06] bg-onyx-900/95 backdrop-blur-xl px-4 py-4 max-h-[70vh] scrollable-no-scrollbar overflow-y-auto overflow-x-hidden" onClick={(e) => e.stopPropagation()}>
               <NavLinks collapsed={false} onNavigate={() => setOpen(false)} />
               <button
                 type="button"
@@ -367,7 +367,9 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
             ))}
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8 custom-scrollbar page-enter">{children}</main>
+        <main className="min-h-0 flex-1 scrollable-no-scrollbar overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8 page-enter">
+          {children}
+        </main>
       </div>
     </div>
   );

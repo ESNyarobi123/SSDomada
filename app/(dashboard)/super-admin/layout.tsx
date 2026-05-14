@@ -122,14 +122,16 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
 
   function NavLinks({ narrow, onNavigate }: { narrow?: boolean; onNavigate?: () => void }) {
     return (
-      <div className={narrow ? "space-y-1" : "space-y-6"}>
+      <div className={narrow ? "space-y-1" : "space-y-5"}>
         {sections.map((section, si) => (
           <div key={section.title}>
             {narrow ? (
-              si > 0 ? <div className="h-3 shrink-0" aria-hidden /> : null
+              si > 0 ? <div className="h-2 shrink-0" aria-hidden /> : null
             ) : (
-              <div className="px-3 mb-2 text-[10px] font-bold uppercase tracking-widest text-rose-200/40">
-                {section.title}
+              <div className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-rose-200/45 flex items-center gap-2">
+                <div className="h-px flex-1 bg-gradient-to-r from-rose-500/30 to-transparent" />
+                <span className="shrink-0">{section.title}</span>
+                <div className="h-px flex-1 bg-gradient-to-l from-rose-500/30 to-transparent" />
               </div>
             )}
             <div className="space-y-0.5">
@@ -141,15 +143,18 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
                     href={href}
                     title={narrow ? label : undefined}
                     onClick={onNavigate}
-                    className={`flex items-center rounded-xl text-sm font-medium transition-all duration-200 ${
-                      narrow ? "justify-center px-0 py-2.5 mx-auto w-11" : "gap-3 px-3 py-2.5"
+                    className={`group flex items-center rounded-xl text-sm font-medium transition-all duration-200 ${
+                      narrow ? "justify-center px-0 py-2.5 mx-auto w-11" : "relative gap-3 px-3 py-2.5"
                     } ${
                       active
-                        ? "bg-rose-500/15 text-rose-100 border border-rose-500/30 shadow-[0_0_18px_rgba(244,63,94,0.12)]"
-                        : "text-onyx-300 hover:bg-white/5 hover:text-white"
+                        ? "bg-rose-500/15 text-rose-50 border border-rose-500/35 shadow-[0_0_20px_rgba(244,63,94,0.12)]"
+                        : "text-onyx-300 hover:bg-white/[0.05] hover:text-white border border-transparent"
                     }`}
                   >
-                    <Icon className="w-4 h-4 shrink-0 opacity-90" />
+                    {active && !narrow && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-rose-400 shadow-[0_0_8px_rgba(244,114,182,0.5)]" aria-hidden />
+                    )}
+                    <Icon className={`w-4 h-4 shrink-0 transition-opacity ${active ? "text-rose-200" : "opacity-80 group-hover:opacity-100"}`} />
                     {!narrow && <span className="truncate">{label}</span>}
                   </Link>
                 );
@@ -164,11 +169,15 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
   return (
     <div className="flex h-dvh max-h-dvh min-h-0 overflow-hidden bg-onyx-950 text-white">
       <aside
-        className={`hidden lg:flex h-full min-h-0 shrink-0 flex-col border-r border-rose-950/50 bg-gradient-to-b from-onyx-900/95 to-onyx-950 transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+        className={`hidden lg:flex h-full min-h-0 shrink-0 flex-col border-r border-white/[0.06] bg-gradient-to-b from-onyx-900/70 via-onyx-950/90 to-onyx-950 backdrop-blur-xl transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
           collapsed ? "w-[4.25rem] xl:w-[4.5rem]" : "w-64 xl:w-72"
         }`}
       >
-        <div className={`${collapsed ? "flex flex-col items-center gap-2 p-3" : "flex items-center gap-2 p-4 pr-3"} bg-black/20`}>
+        <div
+          className={`shrink-0 border-b border-white/[0.06] ${
+            collapsed ? "flex flex-col items-center gap-2 p-3" : "flex items-center gap-2 p-4 pr-3"
+          } bg-black/15`}
+        >
           {collapsed ? (
             <>
               <Link href="/super-admin/dashboard" className="flex justify-center rounded-xl p-1 hover:bg-white/5" title="SSDomada Super Admin">
@@ -177,7 +186,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
               <button
                 type="button"
                 onClick={toggleCollapsed}
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-500/30 text-rose-200 hover:bg-rose-500/10"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-500/35 text-rose-100 hover:bg-rose-500/15 transition-colors"
                 aria-label="Expand sidebar"
                 title="Expand sidebar"
               >
@@ -196,7 +205,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
               <button
                 type="button"
                 onClick={toggleCollapsed}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-onyx-400 hover:bg-rose-500/10 hover:text-rose-100"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-onyx-400 hover:bg-rose-500/15 hover:text-rose-100 border border-transparent hover:border-rose-500/25 transition-all"
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
               >
@@ -207,8 +216,8 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
         </div>
 
         <div
-          className={`mx-3 mt-2 flex items-center gap-2 rounded-lg border border-rose-500/20 bg-rose-950/30 px-2 py-1.5 text-[10px] text-rose-100/80 ${
-            collapsed ? "mx-2 justify-center px-1" : ""
+          className={`shrink-0 mx-3 mt-2 flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-950/25 px-3 py-2 text-[10px] text-rose-100/85 ${
+            collapsed ? "mx-2 justify-center px-2" : ""
           }`}
           title="All admin routes require SUPER_ADMIN. Actions are audit-logged."
         >
@@ -216,11 +225,11 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
           {!collapsed && <span className="leading-tight">Secured session · role verified per request</span>}
         </div>
 
-        <nav className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 pt-3">
+        <nav className="min-h-0 flex-1 scrollable-no-scrollbar overflow-x-hidden overflow-y-auto px-2 pt-3 pb-1">
           <NavLinks narrow={collapsed} />
         </nav>
 
-        <div className="bg-black/25 p-2">
+        <div className="shrink-0 border-t border-white/[0.06] bg-black/15 p-2">
           <button
             type="button"
             onClick={() => void logout()}
@@ -236,7 +245,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex shrink-0 items-center justify-between border-b border-rose-950/40 bg-onyx-900/90 px-4 py-3 backdrop-blur-md lg:hidden">
+        <header className="sticky top-0 z-40 flex shrink-0 items-center justify-between border-b border-white/[0.06] bg-onyx-900/90 px-4 py-3 backdrop-blur-xl lg:hidden">
           <Link href="/super-admin/dashboard" className="flex items-center gap-2">
             <Image src="/images/SSDomada.png" alt="" width={36} height={36} className="rounded-lg" />
             <span className="text-sm font-bold text-rose-100">Super Admin</span>
@@ -246,7 +255,7 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
           </button>
         </header>
         {mobileOpen && (
-          <div className="max-h-[70vh] overflow-y-auto border-b border-rose-950/40 bg-onyx-900 px-4 py-4 lg:hidden">
+          <div className="max-h-[70vh] scrollable-no-scrollbar overflow-y-auto overflow-x-hidden border-b border-rose-950/40 bg-onyx-900/95 backdrop-blur-xl px-4 py-4 lg:hidden">
             <NavLinks onNavigate={() => setMobileOpen(false)} />
             <button
               type="button"
@@ -261,7 +270,9 @@ export default function SuperAdminLayout({ children }: { children: React.ReactNo
             </button>
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8">{children}</main>
+        <main className="min-h-0 flex-1 scrollable-no-scrollbar overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8">
+          {children}
+        </main>
       </div>
     </div>
   );
