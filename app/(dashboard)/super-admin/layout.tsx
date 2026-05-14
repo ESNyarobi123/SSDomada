@@ -13,6 +13,7 @@ import {
   Router,
   MapPin,
   Radio,
+  Inbox,
   BarChart3,
   ScrollText,
   SlidersHorizontal,
@@ -48,6 +49,7 @@ const sections: { title: string; items: NavItem[] }[] = [
       { href: "/super-admin/devices", label: "All devices", icon: Router },
       { href: "/super-admin/sites", label: "Omada sites", icon: MapPin },
       { href: "/super-admin/omada-devices", label: "Live site devices", icon: Radio },
+      { href: "/super-admin/portal-requests", label: "Portal setup requests", icon: Inbox },
     ],
   },
   {

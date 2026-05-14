@@ -86,6 +86,12 @@ enum ResellerPlanInterval {
   LIFETIME
 }
 
+enum PortalSetupRequestStatus {
+  PENDING
+  DONE
+  DISMISSED
+}
+
 enum PackageDuration {
   MINUTES_30
   HOUR_1
@@ -225,8 +231,31 @@ model Reseller {
   portalSessions     PortalSession[]
   planSubscription   ResellerPlanSubscription?
   dashboardNotices   ResellerDashboardNotice[]
+  portalSetupRequests PortalSetupRequest[]
 
   @@map("resellers")
+}
+
+// ============================================================
+// PORTAL SETUP REQUEST — Reseller asks admin to configure Omada manually
+// ============================================================
+
+model PortalSetupRequest {
+  id            String                    @id @default(cuid())
+  resellerId    String
+  status        PortalSetupRequestStatus  @default(PENDING)
+  note          String?                   @db.Text
+  details       Json
+  resolvedAt    DateTime?
+  resolvedById  String?
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+
+  reseller Reseller @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([resellerId, createdAt])
+  @@map("portal_setup_requests")
 }
 
 // ============================================================

@@ -12,9 +12,7 @@ import {
   Layout,
   Eye,
   Upload,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
+  Send,
 } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { authFetch } from "@/lib/auth-client";
@@ -53,21 +51,6 @@ type ResellerSite = {
   _count?: { devices: number; ssidConfigs: number };
 };
 
-type OmadaSyncRow = {
-  siteId: string;
-  siteName: string;
-  omadaSiteId: string;
-  openSsidNames: string[];
-  sync: { ok: boolean; method?: "patch" | "post" | "skipped"; message?: string };
-};
-
-type OmadaSyncPayload = {
-  portalUrl: string;
-  portalName: string;
-  preAuthentication: { configuredViaApi: boolean; doc: string; note: string };
-  sites: OmadaSyncRow[];
-};
-
 const MAX_CAPTIVE_IMAGE_BYTES = 2 * 1024 * 1024;
 const CAPTIVE_IMAGE_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 
@@ -82,13 +65,11 @@ export default function ResellerCaptivePortalPage() {
 
   const [sites, setSites] = useState<ResellerSite[]>([]);
   const [sitesLoading, setSitesLoading] = useState(true);
-  /** Omada-linked site CUID to push to; empty until user picks (or auto-filled when only one site). */
-  const [pushSiteId, setPushSiteId] = useState("");
-  const [omadaSyncing, setOmadaSyncing] = useState(false);
-  const [omadaSyncErr, setOmadaSyncErr] = useState<string | null>(null);
-  const [omadaPushOk, setOmadaPushOk] = useState<string | null>(null);
-
-  const omadaLinkedSites = sites.filter((s) => s.omadaSiteId);
+  const [requestSiteId, setRequestSiteId] = useState<string>("");
+  const [adminNote, setAdminNote] = useState("");
+  const [sendingRequest, setSendingRequest] = useState(false);
+  const [requestErr, setRequestErr] = useState<string | null>(null);
+  const [requestOk, setRequestOk] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -123,56 +104,26 @@ export default function ResellerCaptivePortalPage() {
     };
   }, []);
 
-  useEffect(() => {
-    const linked = sites.filter((s) => s.omadaSiteId);
-    if (linked.length === 1) {
-      setPushSiteId(linked[0].id);
-      return;
-    }
-    setPushSiteId((prev) => {
-      if (!prev) return "";
-      return linked.some((s) => s.id === prev) ? prev : "";
-    });
-  }, [sites]);
-
-  async function syncOmadaPortal() {
-    setOmadaSyncing(true);
-    setOmadaSyncErr(null);
-    setOmadaPushOk(null);
+  async function sendAdminSetupRequest() {
+    setSendingRequest(true);
+    setRequestErr(null);
+    setRequestOk(null);
     setErr(null);
     setOk(null);
-    if (!pushSiteId || !omadaLinkedSites.some((s) => s.id === pushSiteId)) {
-      setOmadaSyncing(false);
-      setOmadaSyncErr("Choose a location first.");
-      return;
-    }
-    const r = await resellerJson<OmadaSyncPayload>("/api/v1/reseller/omada/sync-portal", {
+    const body: { siteId?: string; note?: string } = {};
+    if (requestSiteId) body.siteId = requestSiteId;
+    if (adminNote.trim()) body.note = adminNote.trim();
+    const r = await resellerJson<{ message?: string }>("/api/v1/reseller/portal-setup-requests", {
       method: "POST",
-      body: JSON.stringify({ siteId: pushSiteId }),
+      body: JSON.stringify(body),
     });
-    setOmadaSyncing(false);
+    setSendingRequest(false);
     if (!r.ok) {
-      if (r.code === "NO_PUBLIC_BASE") {
-        setOmadaSyncErr("Setup is incomplete. Please contact support.");
-      } else {
-        setOmadaSyncErr("Something went wrong. Try again or contact support.");
-      }
+      setRequestErr(r.error || "Could not send. Try again.");
       return;
     }
-    const row = r.data?.sites?.[0];
-    if (!row) {
-      setOmadaSyncErr("No location linked to your Wi‑Fi controller yet.");
-      return;
-    }
-    if (row.sync.ok) {
-      setOmadaPushOk("Your guest portal was sent to your devices.");
-      return;
-    }
-    if (row.openSsidNames.length === 0) {
-      setOmadaSyncErr("Add an open guest Wi‑Fi network for this location first.");
-      return;
-    }
-    setOmadaSyncErr("Your Wi‑Fi controller did not accept the update. Try again later or contact support.");
+    setRequestOk(r.data?.message || "Request sent.");
+    setAdminNote("");
   }
 
   async function uploadCaptiveAsset(kind: "logo" | "bgImage", file: File) {
@@ -542,87 +493,91 @@ export default function ResellerCaptivePortalPage() {
         </div>
       </form>
 
-      <div className="rounded-2xl border border-gold-10 bg-gradient-to-br from-white/[0.04] to-transparent p-5 md:p-6 space-y-4">
-        <h2 className="text-lg font-bold text-white tracking-tight">Push captive portal to devices</h2>
-        <p className="text-xs text-onyx-500">Pick your location, then push so guest Wi‑Fi uses this portal.</p>
+      <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 md:p-6 space-y-4">
+        <h2 className="text-base font-bold text-white">Controller setup</h2>
+        <p className="text-sm text-onyx-400">
+          Ask our team to link this portal on your Omada controller for your Wi‑Fi.
+        </p>
 
         {sitesLoading ? (
           <p className="text-xs text-onyx-500 flex items-center gap-2">
             <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden /> Loading…
           </p>
-        ) : omadaLinkedSites.length === 0 ? (
-          <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 flex gap-3 text-sm text-amber-100/95">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" aria-hidden />
-            <p className="text-xs leading-relaxed">
-              Add a{" "}
-              <Link href="/reseller/sites" className="underline text-gold">
-                location
-              </Link>{" "}
-              and an{" "}
-              <Link href="/reseller/ssids" className="underline text-gold">
-                open guest Wi‑Fi
-              </Link>{" "}
-              first.
-            </p>
-          </div>
+        ) : sites.length === 0 ? (
+          <p className="text-sm text-onyx-400">
+            Add a{" "}
+            <Link href="/reseller/sites" className="text-gold underline underline-offset-2">
+              location
+            </Link>{" "}
+            first.
+          </p>
         ) : (
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
-            <div className="flex-1 min-w-[200px]">
-              <label htmlFor="push-site-id" className="text-xs font-semibold text-onyx-400">
-                Location
+          <>
+            {sites.length > 1 ? (
+              <div>
+                <label htmlFor="req-site" className="text-xs font-semibold text-onyx-400">
+                  Location
+                </label>
+                <select
+                  id="req-site"
+                  value={requestSiteId}
+                  onChange={(e) => setRequestSiteId(e.target.value)}
+                  disabled={sendingRequest}
+                  className="mt-1.5 w-full max-w-md rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 text-sm text-white focus:border-gold-30 outline-none"
+                >
+                  <option value="">All locations</option>
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <div>
+              <label htmlFor="req-note" className="text-xs font-semibold text-onyx-400">
+                Message (optional)
               </label>
-              <select
-                id="push-site-id"
-                value={pushSiteId}
-                onChange={(e) => setPushSiteId(e.target.value)}
-                disabled={omadaSyncing || omadaLinkedSites.length === 1}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 text-sm text-white focus:border-gold-30 outline-none disabled:opacity-60"
-              >
-                {omadaLinkedSites.length > 1 ? (
-                  <option value="">Choose location…</option>
-                ) : null}
-                {omadaLinkedSites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+              <textarea
+                id="req-note"
+                value={adminNote}
+                onChange={(e) => setAdminNote(e.target.value)}
+                disabled={sendingRequest}
+                rows={2}
+                maxLength={4000}
+                placeholder="Anything we should know…"
+                className="mt-1.5 w-full max-w-lg rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white placeholder:text-onyx-600 focus:border-gold-30 outline-none resize-y"
+              />
             </div>
             <button
               type="button"
-              onClick={() => void syncOmadaPortal()}
-              disabled={
-                omadaSyncing || !pushSiteId || omadaLinkedSites.length === 0
-              }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-gold px-5 py-2.5 text-sm font-bold text-onyx-950 shadow-lg shadow-gold/20 hover:bg-gold-400 disabled:opacity-40 disabled:pointer-events-none transition-all sm:shrink-0"
-              aria-busy={omadaSyncing}
+              onClick={() => void sendAdminSetupRequest()}
+              disabled={sendingRequest}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-400/40 bg-rose-500/15 px-5 py-2.5 text-sm font-bold text-rose-100 hover:bg-rose-500/25 disabled:opacity-40 transition-all"
+              aria-busy={sendingRequest}
             >
-              {omadaSyncing ? (
+              {sendingRequest ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
-                  Pushing…
+                  Sending…
                 </>
               ) : (
                 <>
-                  <Globe className="w-4 h-4" aria-hidden />
-                  Push to devices
+                  <Send className="w-4 h-4" aria-hidden />
+                  Send to admin
                 </>
               )}
             </button>
-          </div>
+          </>
         )}
 
-        {omadaPushOk && (
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100 flex items-start gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" aria-hidden />
-            <span>{omadaPushOk}</span>
+        {requestOk && (
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            {requestOk}
           </div>
         )}
-        {omadaSyncErr && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 flex items-start gap-2">
-            <XCircle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
-            <span>{omadaSyncErr}</span>
-          </div>
+        {requestErr && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{requestErr}</div>
         )}
       </div>
     </div>
