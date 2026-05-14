@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, RefreshCw, Shield, Settings, Heart, Key, FlaskConical } from "lucide-react";
 import { adminJson } from "@/lib/admin-fetch";
 import { RESELLER_PLAN_PAYWALL_SETTING_KEY } from "@/lib/platform-settings";
+import { OmadaPortalNetworkGuide } from "@/components/super-admin/OmadaPortalNetworkGuide";
 
 function maskValue(key: string, raw: string): string {
   const lower = key.toLowerCase();
@@ -118,6 +119,8 @@ export default function AdminSettingsPage() {
           <div className="text-2xl font-black text-white">{entries.filter(([k]) => /(secret|password|token|key|credential|authorization)/i.test(k)).length}</div>
         </div>
       </div>
+
+      <OmadaPortalNetworkGuide />
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
 
