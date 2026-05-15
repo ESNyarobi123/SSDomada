@@ -171,7 +171,6 @@ export class PaymentService {
         amount: input.amount,
         currency: reseller.currency,
         phone: input.phone,
-        provider: input.provider,
         description: `WiFi Package — ${reseller.companyName}`,
         customer: {
           name: input.customerName,
@@ -186,6 +185,7 @@ export class PaymentService {
           subscriptionId: input.subscriptionId,
           portalSessionId: input.portalSessionId,
           clientMac: input.clientMac,
+          provider: input.provider,
         }),
       },
       idempotencyKey,

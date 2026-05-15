@@ -50,10 +50,24 @@ export interface SnippeMoney {
   currency: string;
 }
 
+/**
+ * Snippe customer block.
+ *   - Mobile money requires firstname / lastname / email.
+ *   - Card additionally requires address / city / state / postcode / country.
+ * We accept `name` too and split it client-side for ergonomics.
+ */
 export interface SnippeCustomer {
+  /** Convenience: split into firstname/lastname when serialising. */
   name?: string;
-  phone?: string;
+  firstname?: string;
+  lastname?: string;
   email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  postcode?: string;
+  country?: string;
 }
 
 /** Input for hosted-checkout (POST /api/v1/sessions). */
@@ -75,12 +89,15 @@ export interface SnippeCreatePaymentInput {
   amount: number;
   currency?: string;
   paymentType: "mobile" | "card" | "dynamic-qr";
+  /** Customer phone (auto-normalised to `255XXXXXXXXX`). */
   phone?: string;
-  provider?: SnippeMobileProvider;
   description?: string;
   customer?: SnippeCustomer;
   webhookUrl?: string;
+  /** Required for card. Snippe redirects the customer here after success. */
   redirectUrl?: string;
+  /** Required for card. Snippe redirects the customer here on cancel/failure. */
+  cancelUrl?: string;
   metadata?: Record<string, string>;
 }
 
@@ -89,9 +106,11 @@ export interface SnippeCreatePayoutInput {
   amount: number;
   currency?: string;
   channel: "mobile" | "bank";
-  provider?: SnippeMobileProvider;
+  /** Mobile only — Snippe auto-detects from prefix when omitted. */
   recipientPhone?: string;
+  /** Bank only — account number at the recipient bank. */
   recipientAccount?: string;
+  /** Bank only — short code such as `ABSA`, `CRDB`, `NMB`, etc. */
   recipientBank?: string;
   recipientName: string;
   narration?: string;
@@ -296,7 +315,12 @@ export class SnippeService {
 
   /**
    * Create a direct payment intent.
-   * For mobile_money this triggers an STK push to the customer's phone.
+   * For `mobile` this triggers an STK push to the customer's phone.
+   * For `card` this returns a hosted `payment_url` to redirect to.
+   *
+   * Snippe schema (2026-01-25):
+   *   { payment_type, details: { amount, currency, [redirect_url, cancel_url] },
+   *     phone_number, customer: { firstname, lastname, email, ... }, webhook_url, metadata }
    */
   static async createPayment(
     input: SnippeCreatePaymentInput,
@@ -304,16 +328,22 @@ export class SnippeService {
   ): Promise<SnippePaymentResult> {
     const key = idempotencyKey || this.generateIdempotencyKey(input.paymentType.slice(0, 4));
 
-    const body: Record<string, unknown> = {
-      payment_type: input.paymentType,
+    const details: Record<string, unknown> = {
       amount: Math.round(input.amount),
       currency: input.currency || "TZS",
+    };
+    if (input.paymentType === "card") {
+      if (input.redirectUrl) details.redirect_url = input.redirectUrl;
+      if (input.cancelUrl) details.cancel_url = input.cancelUrl;
+    }
+
+    const body: Record<string, unknown> = {
+      payment_type: input.paymentType,
+      details,
+      phone_number: normalisePhone(input.phone),
+      customer: buildCustomerBlock(input.customer, input.phone, input.paymentType === "card"),
       description: input.description,
-      customer: input.customer ? cleanCustomer(input.customer) : undefined,
-      phone_number: input.phone,
-      provider: input.provider,
       webhook_url: input.webhookUrl,
-      redirect_url: input.redirectUrl,
       metadata: input.metadata,
     };
 
@@ -393,6 +423,10 @@ export class SnippeService {
   /**
    * Single endpoint that handles mobile and bank disbursements.
    * Always calculate the fee with `getPayoutFee` first to ensure balance.
+   *
+   * Snippe schema (2026-01-25) — fields are FLAT, not nested:
+   *   mobile: { amount, channel: "mobile", recipient_phone, recipient_name, narration, ... }
+   *   bank:   { amount, channel: "bank", recipient_bank, recipient_account, recipient_name, ... }
    */
   static async createPayout(
     input: SnippeCreatePayoutInput,
@@ -402,25 +436,42 @@ export class SnippeService {
 
     const body: Record<string, unknown> = {
       amount: Math.round(input.amount),
-      currency: input.currency || "TZS",
-      channel: { type: input.channel === "mobile" ? "mobile_money" : "bank" },
-      recipient: buildPayoutRecipient(input),
+      channel: input.channel,
+      recipient_name: input.recipientName,
       narration: input.narration,
       webhook_url: input.webhookUrl,
       metadata: input.metadata,
     };
+
+    if (input.channel === "mobile") {
+      body.recipient_phone = normalisePhone(input.recipientPhone);
+    } else {
+      body.recipient_bank = input.recipientBank;
+      body.recipient_account = input.recipientAccount;
+    }
+
+    // `currency` is implied (`TZS`) in mobile/bank payouts — sending it is fine but optional.
+    if (input.currency) body.currency = input.currency;
 
     try {
       const res = await this.getClient().post("/v1/payouts/send", body, {
         headers: { "Idempotency-Key": key },
       });
       const d = unwrap(res.data);
+      const feeValue =
+        parseMoney(d.fees)?.value ??
+        (typeof d.fee_amount === "number" ? d.fee_amount : 0);
+      const totalValue =
+        parseMoney(d.total)?.value ??
+        (typeof d.total_amount === "number"
+          ? d.total_amount
+          : Math.round(input.amount) + feeValue);
       return {
         success: true,
         reference: d.reference || d.id || "",
         status: d.status || "pending",
-        fee: parseMoney(d.fees)?.value || 0,
-        total: parseMoney(d.total)?.value || (Math.round(input.amount) + (parseMoney(d.fees)?.value || 0)),
+        fee: feeValue,
+        total: totalValue,
         amount: parseMoney(d.amount),
         code: res.status,
         raw: res.data,
@@ -610,29 +661,87 @@ function parseMoney(value: unknown): SnippeMoney | undefined {
   return undefined;
 }
 
-function cleanCustomer(c: SnippeCustomer): SnippeCustomer {
-  const out: SnippeCustomer = {};
-  if (c.name) out.name = c.name;
-  if (c.phone) out.phone = c.phone;
-  if (c.email) out.email = c.email;
+/**
+ * Lightweight customer block used by Sessions (`/api/v1/sessions`).
+ * Sessions accept the loose `{name, phone, email}` shape — they don't require
+ * firstname/lastname/billing fields like the direct `/v1/payments` endpoint.
+ */
+function cleanCustomer(c: SnippeCustomer): Record<string, unknown> | undefined {
+  const name = c.name?.trim() || [c.firstname, c.lastname].filter(Boolean).join(" ").trim();
+  const phone = normalisePhone(c.phone);
+  const email = c.email?.trim();
+  if (!name && !phone && !email) return undefined;
+  const out: Record<string, unknown> = {};
+  if (name) out.name = name;
+  if (phone) out.phone = phone;
+  if (email) out.email = email;
   return out;
 }
 
-function buildPayoutRecipient(input: SnippeCreatePayoutInput): Record<string, unknown> {
-  if (input.channel === "mobile") {
-    return {
-      type: "mobile_money",
-      name: input.recipientName,
-      phone: input.recipientPhone,
-      provider: input.provider,
-    };
+/**
+ * Build the Snippe `customer` block.
+ *
+ * Mobile money requires firstname / lastname / email. Card adds address fields.
+ * We split `name` into firstname/lastname automatically and synthesise a
+ * placeholder email from the phone when the caller didn't pass one — this is the
+ * only way to pass Snippe's required-field validation for anonymous users.
+ */
+function buildCustomerBlock(
+  customer: SnippeCustomer | undefined,
+  phone: string | undefined,
+  includeBillingAddress: boolean,
+): Record<string, unknown> {
+  const c: SnippeCustomer = customer ?? {};
+
+  let firstname = c.firstname?.trim();
+  let lastname = c.lastname?.trim();
+
+  if (!firstname || !lastname) {
+    const parts = (c.name || "").trim().split(/\s+/).filter(Boolean);
+    if (!firstname) firstname = parts[0];
+    if (!lastname) lastname = parts.length > 1 ? parts.slice(1).join(" ") : undefined;
   }
-  return {
-    type: "bank",
-    name: input.recipientName,
-    account_number: input.recipientAccount,
-    bank_code: input.recipientBank,
+
+  // Phone-derived defaults — Snippe rejects blank firstname/lastname/email.
+  const normalisedPhone = normalisePhone(phone || c.phone);
+  if (!firstname) firstname = "WiFi";
+  if (!lastname) lastname = normalisedPhone ? `User-${normalisedPhone.slice(-4)}` : "Customer";
+
+  let email = c.email?.trim();
+  if (!email) {
+    if (normalisedPhone) email = `${normalisedPhone}@portal.ssdomada.site`;
+    else email = "anonymous@portal.ssdomada.site";
+  }
+
+  const block: Record<string, unknown> = {
+    firstname,
+    lastname,
+    email,
   };
+
+  if (includeBillingAddress) {
+    block.address = c.address || "N/A";
+    block.city = c.city || "Dar es Salaam";
+    block.state = c.state || "DSM";
+    block.postcode = c.postcode || "14101";
+    block.country = c.country || "TZ";
+  }
+
+  return block;
+}
+
+/**
+ * Normalise a Tanzanian phone number to Snippe's `255XXXXXXXXX` format.
+ * Returns the original input if it doesn't look like a TZ number so callers
+ * keep informative validation errors instead of silently sending garbage.
+ */
+function normalisePhone(input: string | undefined | null): string | undefined {
+  if (!input) return undefined;
+  const digits = input.replace(/[^0-9]/g, "");
+  if (digits.startsWith("255") && digits.length === 12) return digits;
+  if (digits.startsWith("0") && digits.length === 10) return `255${digits.slice(1)}`;
+  if (digits.length === 9) return `255${digits}`;
+  return digits || undefined;
 }
 
 function safeBuffer(s: string): Buffer {

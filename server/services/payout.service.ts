@@ -1,7 +1,6 @@
 import { prisma } from "@/server/lib/prisma";
 import {
   SnippeService,
-  type SnippeMobileProvider,
   type SnippeWebhookEvent,
 } from "./snippe.service";
 
@@ -51,7 +50,6 @@ export class PayoutService {
         amount: withdrawal.amount,
         currency: withdrawal.currency,
         channel: withdrawal.channel === "MOBILE" ? "mobile" : "bank",
-        provider: detectMobileProvider(withdrawal.recipientPhone),
         recipientPhone: withdrawal.recipientPhone || undefined,
         recipientAccount: withdrawal.recipientAccount || undefined,
         recipientBank: withdrawal.recipientBank || undefined,
@@ -232,30 +230,6 @@ function buildWebhookUrl(): string {
     .trim()
     .replace(/\/+$/, "");
   return base ? `${base}/api/webhooks/snippe` : "/api/webhooks/snippe";
-}
-
-/**
- * Best-effort mobile money provider detection from a Tanzanian phone number.
- * Snippe accepts this hint so the disbursement goes to the right network without
- * relying on number portability lookups. Returns undefined when unsure.
- */
-function detectMobileProvider(phone: string | null | undefined): SnippeMobileProvider | undefined {
-  if (!phone) return undefined;
-  const digits = phone.replace(/[^0-9]/g, "");
-  // Match against the 9-digit national number regardless of "+255" / "0" prefix.
-  const local = digits.slice(-9);
-  if (local.length < 9) return undefined;
-  const prefix = local.slice(0, 2);
-
-  // Airtel: 68, 69, 78
-  if (["68", "69", "78"].includes(prefix)) return "airtel";
-  // Vodacom M-Pesa: 74, 75, 76
-  if (["74", "75", "76"].includes(prefix)) return "mpesa";
-  // Tigo Mixx by Yas: 65, 67, 71
-  if (["65", "67", "71"].includes(prefix)) return "mixx";
-  // Halotel: 61, 62
-  if (["61", "62"].includes(prefix)) return "halotel";
-  return undefined;
 }
 
 function serialiseMetadata(event: SnippeWebhookEvent) {
