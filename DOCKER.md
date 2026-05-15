@@ -6,6 +6,8 @@ Default environment values in `docker-compose.yml` use **`https://ssdomada.site`
 
 Production warning: Docker Compose automatically reads the root `.env`. Do not leave `NEXTAUTH_URL` or `NEXT_PUBLIC_APP_URL` as `http://localhost:3000` on the server, because Omada portal sync and Snippe callbacks will then point guests/payment providers at localhost instead of the public site.
 
+If you add or change Omada Hotspot Operator credentials in `.env`, make sure the `app.environment` block in `docker-compose.yml` passes `OMADA_HOTSPOT_USERNAME`, `OMADA_HOTSPOT_PASSWORD`, and `OMADA_HOTSPOT_TLS_INSECURE` into the container. After editing `.env`, recreate the app container so Docker picks up the new values.
+
 **Before going live**
 
 1. Point DNS **A** (and **AAAA** if you use IPv6) for `ssdomada.site` (and `www.ssdomada.site` if you use it) to your server’s public IP.
