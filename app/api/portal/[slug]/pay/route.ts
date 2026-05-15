@@ -1,50 +1,76 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
-import crypto from "crypto";
+import { PaymentService } from "@/server/services/payment.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
+import type { SnippeMobileProvider } from "@/server/services/snippe.service";
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
 }
 
+const ANONYMOUS_USER_EMAIL = "anonymous@portal.ssdomada.com";
+
 /**
  * POST /api/portal/[slug]/pay
  *
- * Initiate payment from captive portal.
- * Customer selects a package and pays via Snippe.
+ * Captive-portal payment kickoff.
  *
  * Body:
- *   { sessionId: string, packageId: string, phone: string, paymentMethod: "MOBILE" | "CARD" }
+ *   {
+ *     sessionId:   string,         // PortalSession.id (created on initial portal load)
+ *     packageId:   string,
+ *     phone:       string,
+ *     paymentMethod?: "MOBILE" | "CARD"   (default MOBILE)
+ *   }
  *
- * Flow:
- *   1. Validate portal session and package
- *   2. Create Payment record with PENDING status
- *   3. Call Snippe API to create payment session
- *   4. Return Snippe checkout URL to frontend
- *   5. Snippe webhook → /api/webhooks/snippe → create RADIUS credentials
+ * Returns either:
+ *   { success: true, data: { checkoutUrl, ... } }   → card / session, frontend redirects
+ *   { success: true, data: { polling: true, ... } } → mobile STK push, frontend polls /status
+ *
+ * Side effects:
+ *   - Creates / finds the end-user record (by phone).
+ *   - Creates a Subscription + Payment (PENDING).
+ *   - Moves the PortalSession into "PAYING".
+ *   - Asks Snippe to push USSD prompt (mobile) or hosted checkout (card).
+ *   - When Snippe webhook fires → PaymentService grants RADIUS/Omada access.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   const { slug } = await params;
 
   try {
     const body = await req.json();
-    const { sessionId, packageId, phone, paymentMethod = "MOBILE" } = body;
+    const {
+      sessionId,
+      packageId,
+      phone,
+      paymentMethod = "MOBILE",
+    } = body as {
+      sessionId?: string;
+      packageId?: string;
+      phone?: string;
+      paymentMethod?: "MOBILE" | "CARD";
+    };
 
     if (!sessionId || !packageId) {
       return NextResponse.json({ error: "sessionId and packageId are required" }, { status: 400 });
     }
 
-    // 1. Find reseller
+    // 1. Reseller
     const reseller = await prisma.reseller.findUnique({
       where: { brandSlug: slug },
-      select: { id: true, companyName: true, commissionRate: true, isActive: true, currency: true },
+      select: {
+        id: true,
+        companyName: true,
+        commissionRate: true,
+        isActive: true,
+        currency: true,
+      },
     });
-
     if (!reseller || !reseller.isActive) {
       return NextResponse.json({ error: "Portal not available" }, { status: 404 });
     }
 
-    // 2. Validate portal session
+    // 2. Portal session must exist & be on a valid state
     const portalSession = await prisma.portalSession.findFirst({
       where: {
         id: sessionId,
@@ -52,159 +78,190 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         status: { in: ["PENDING", "PAYING"] },
       },
     });
-
     if (!portalSession) {
-      return NextResponse.json({ error: "Session expired. Reconnect to WiFi." }, { status: 410 });
+      return NextResponse.json(
+        { error: "Session expired. Reconnect to WiFi." },
+        { status: 410 },
+      );
     }
 
-    // 3. Validate package
+    // 3. Package must belong to reseller and be active
     const pkg = await prisma.package.findFirst({
       where: { id: packageId, resellerId: reseller.id, isActive: true },
     });
-
     if (!pkg) {
       return NextResponse.json({ error: "Package not available" }, { status: 404 });
     }
 
-    // 4. Calculate revenue split
-    const platformFee = Math.round(pkg.price * reseller.commissionRate);
-    const resellerAmount = pkg.price - platformFee;
-
-    // 5. Create or find end-user
-    let userId: string | undefined;
-    if (phone) {
-      let user = await prisma.user.findFirst({
-        where: { phone: phone.replace(/\s/g, "") },
-      });
-
-      if (!user) {
-        user = await prisma.user.create({
-          data: {
-            email: `${phone.replace(/[^0-9]/g, "")}@portal.ssdomada.com`,
-            phone: phone.replace(/\s/g, ""),
-            role: "END_USER",
-            name: `WiFi User ${phone.slice(-4)}`,
-          },
-        });
-      }
-      userId = user.id;
+    // 4. Normalise phone — required for mobile, optional for card.
+    const normalizedPhone = phone ? phone.replace(/[^0-9+]/g, "") : "";
+    if (paymentMethod === "MOBILE" && !normalizedPhone) {
+      return NextResponse.json(
+        { error: "Phone number is required for mobile payment" },
+        { status: 400 },
+      );
     }
 
-    // 6. Create subscription record
+    // 5. Find or create end-user (keyed by phone — anonymous fallback)
+    const userId = await ensureEndUser(normalizedPhone);
+
+    // 6. Subscription record (becomes ACTIVE only after webhook authorises RADIUS)
     const expiresAt = new Date(Date.now() + pkg.durationMinutes * 60 * 1000);
     const subscription = await prisma.subscription.create({
       data: {
-        userId: userId || "anonymous",
+        userId,
         packageId: pkg.id,
         status: "ACTIVE",
         expiresAt,
       },
     });
 
-    // 7. Generate idempotency key
-    const idempotencyKey = crypto.randomUUID();
-
-    // 8. Create Payment record (PENDING — will be completed by webhook)
-    const payment = await prisma.payment.create({
-      data: {
-        snippeReference: `PAY-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
-        userId: userId || "anonymous",
-        resellerId: reseller.id,
-        subscriptionId: subscription.id,
-        amount: pkg.price,
-        resellerAmount,
-        platformFee,
-        currency: reseller.currency,
-        status: "PENDING",
-        paymentType: paymentMethod === "CARD" ? "CARD" : "MOBILE",
-        customerPhone: phone,
-        idempotencyKey,
-      } as any,
-    });
-
-    // 9. Update portal session
+    // 7. Move portal session to PAYING — frontend polls /status to detect AUTHORIZED.
     await prisma.portalSession.update({
       where: { id: sessionId },
       data: {
         status: "PAYING",
         packageId: pkg.id,
-        paymentId: payment.id,
       },
     });
 
-    // 10. Call Snippe to create payment
-    const appBase = getPortalPublicBaseUrl();
-    const snippePayload = {
-      amount: pkg.price,
-      currency: reseller.currency,
-      description: `WiFi - ${pkg.name} (${reseller.companyName})`,
-      callback_url: `${appBase}/api/webhooks/snippe`,
-      return_url: `${appBase}/portal/${slug}/success?session=${sessionId}`,
-      cancel_url: `${appBase}/portal/${slug}?session=${sessionId}&cancelled=true`,
-      metadata: {
-        paymentId: payment.id,
-        sessionId,
+    // 8. Kick off Snippe via the orchestrator service
+    if (paymentMethod === "CARD") {
+      const result = await PaymentService.initiateSession({
+        userId,
         resellerId: reseller.id,
-        subscriptionId: subscription.id,
-        clientMac: portalSession.clientMac,
         packageId: pkg.id,
-      },
-      customer: {
-        phone,
-      },
-    };
-
-    let checkoutUrl: string | null = null;
-
-    try {
-      const snippeApiBase =
-        process.env.SNIPPE_API_URL || process.env.SNIPPE_BASE_URL || "https://api.snippe.co.tz/v1";
-      const snippeRes = await fetch(`${snippeApiBase}/payment-sessions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.SNIPPE_SECRET_KEY}`,
-          "Idempotency-Key": idempotencyKey,
-        },
-        body: JSON.stringify(snippePayload),
+        subscriptionId: subscription.id,
+        amount: pkg.price,
+        paymentType: "CARD",
+        customerPhone: normalizedPhone || undefined,
+        customerName: `WiFi user ${normalizedPhone.slice(-4) || pkg.name}`,
+        portalSessionId: sessionId,
+        clientMac: portalSession.clientMac,
+        redirectUrl: buildSuccessRedirect(slug, sessionId),
       });
 
-      const snippeData = await snippeRes.json();
+      await prisma.portalSession.update({
+        where: { id: sessionId },
+        data: { paymentId: result.paymentId },
+      });
 
-      if (snippeData.data?.checkout_url) {
-        checkoutUrl = snippeData.data.checkout_url;
-
-        // Update payment with Snippe reference
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { snippeReference: snippeData.data.id || payment.snippeReference } as any,
-        });
-      } else {
-        console.error("[Portal Pay] Snippe error:", snippeData);
-        return NextResponse.json({
-          error: "Payment gateway error. Please try again.",
-          details: snippeData.message,
-        }, { status: 502 });
-      }
-    } catch (snippeError) {
-      console.error("[Portal Pay] Snippe request failed:", snippeError);
-      return NextResponse.json({ error: "Payment service unavailable" }, { status: 503 });
+      return NextResponse.json({
+        success: true,
+        data: {
+          paymentId: result.paymentId,
+          checkoutUrl: result.checkoutUrl,
+          sessionId,
+          amount: pkg.price,
+          currency: reseller.currency,
+          package: pkg.name,
+          expiresAt: expiresAt.toISOString(),
+        },
+      });
     }
+
+    // MOBILE money — direct STK push, user stays on the portal page.
+    const provider = detectProvider(normalizedPhone);
+    if (!provider) {
+      return NextResponse.json(
+        {
+          error:
+            "Unable to detect mobile money provider from phone number. Please use a Tanzanian Airtel, Vodacom, Mixx (Yas), or Halotel number.",
+        },
+        { status: 422 },
+      );
+    }
+
+    const result = await PaymentService.initiateMobilePush({
+      userId,
+      resellerId: reseller.id,
+      packageId: pkg.id,
+      subscriptionId: subscription.id,
+      amount: pkg.price,
+      paymentType: "MOBILE",
+      provider,
+      phone: normalizedPhone,
+      customerPhone: normalizedPhone,
+      portalSessionId: sessionId,
+      clientMac: portalSession.clientMac,
+    });
+
+    await prisma.portalSession.update({
+      where: { id: sessionId },
+      data: { paymentId: result.paymentId },
+    });
 
     return NextResponse.json({
       success: true,
       data: {
-        paymentId: payment.id,
-        checkoutUrl,
+        paymentId: result.paymentId,
+        reference: result.reference,
         sessionId,
+        polling: true,
         amount: pkg.price,
         currency: reseller.currency,
         package: pkg.name,
+        provider,
         expiresAt: expiresAt.toISOString(),
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("[Portal Pay] Error:", error);
-    return NextResponse.json({ error: "Failed to initiate payment" }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || "Failed to initiate payment" },
+      { status: 500 },
+    );
   }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+async function ensureEndUser(phone: string): Promise<string> {
+  if (!phone) {
+    const anon = await prisma.user.upsert({
+      where: { email: ANONYMOUS_USER_EMAIL },
+      update: {},
+      create: {
+        email: ANONYMOUS_USER_EMAIL,
+        role: "END_USER",
+        name: "Anonymous WiFi User",
+      },
+      select: { id: true },
+    });
+    return anon.id;
+  }
+
+  const email = `${phone.replace(/[^0-9]/g, "")}@portal.ssdomada.com`;
+  const user = await prisma.user.upsert({
+    where: { email },
+    update: { phone },
+    create: {
+      email,
+      phone,
+      role: "END_USER",
+      name: `WiFi User ${phone.slice(-4)}`,
+    },
+    select: { id: true },
+  });
+  return user.id;
+}
+
+function buildSuccessRedirect(slug: string, sessionId: string): string {
+  const base = getPortalPublicBaseUrl();
+  const path = `/portal/${encodeURIComponent(slug)}/success?session=${encodeURIComponent(sessionId)}`;
+  return base ? `${base}${path}` : path;
+}
+
+function detectProvider(phone: string): SnippeMobileProvider | undefined {
+  const digits = phone.replace(/[^0-9]/g, "");
+  const local = digits.slice(-9);
+  if (local.length < 9) return undefined;
+  const prefix = local.slice(0, 2);
+  if (["68", "69", "78"].includes(prefix)) return "airtel";
+  if (["74", "75", "76"].includes(prefix)) return "mpesa";
+  if (["65", "67", "71"].includes(prefix)) return "mixx";
+  if (["61", "62"].includes(prefix)) return "halotel";
+  return undefined;
 }

@@ -1,18 +1,29 @@
 import { prisma } from "@/server/lib/prisma";
-import { SnippeService } from "./snippe.service";
+import {
+  SnippeService,
+  type SnippeMobileProvider,
+  type SnippeWebhookEvent,
+} from "./snippe.service";
 
-// ============================================================
-// PAYOUT SERVICE
-// Handles reseller withdrawal processing via Snippe Payouts API
-// ============================================================
-
+/**
+ * PayoutService
+ *
+ * Owns the *reseller withdrawal* lifecycle:
+ *
+ *   reseller requests withdrawal
+ *     → admin approves (route layer)
+ *     → admin processes (this service)  → POST /v1/payouts/send to Snippe
+ *     → Snippe webhook returns          → handlePayoutWebhook here
+ *
+ * Wallet semantics:
+ *   - Amount is **already** deducted from the wallet at request time
+ *     (see app/api/v1/reseller/withdrawals POST).
+ *   - On Snippe success (webhook): nothing else to do for the wallet.
+ *   - On Snippe failure / reversal: we refund the wallet.
+ */
 export class PayoutService {
-  /**
-   * Process a withdrawal request — sends payout via Snippe
-   * Called by Super Admin (manual) or automated after approval
-   */
+  /** Process an approved withdrawal — issues the disbursement through Snippe. */
   static async processWithdrawal(withdrawalId: string) {
-    // 1. Get withdrawal details
     const withdrawal = await prisma.withdrawal.findUnique({
       where: { id: withdrawalId },
       include: { reseller: true },
@@ -23,92 +34,75 @@ export class PayoutService {
       throw new Error("Withdrawal must be approved before processing");
     }
 
-    // 2. Generate idempotency key
-    const idempotencyKey = SnippeService.generateIdempotencyKey();
-
-    // 3. Send payout via Snippe based on channel
-    let snippeResponse;
-
-    const webhookUrl = `${process.env.NEXTAUTH_URL}/api/webhooks/snippe`;
+    const idempotencyKey = SnippeService.generateIdempotencyKey("po");
+    const webhookUrl = buildWebhookUrl();
+    const narration = `SSDomada withdrawal — ${withdrawal.reseller.companyName}`;
 
     if (withdrawal.channel === "MOBILE") {
       if (!withdrawal.recipientPhone) {
         throw new Error("Recipient phone number is required for mobile payout");
       }
-
-      snippeResponse = await SnippeService.createMobilePayout({
-        amount: withdrawal.amount,
-        currency: withdrawal.currency,
-        channel: "mobile",
-        recipientPhone: withdrawal.recipientPhone,
-        recipientName: withdrawal.recipientName,
-        narration: `SSDomada withdrawal - ${withdrawal.reseller.companyName}`,
-        webhookUrl,
-        metadata: {
-          withdrawalId: withdrawal.id,
-          resellerId: withdrawal.resellerId,
-        },
-      }, idempotencyKey);
-    } else {
-      // BANK payout
-      if (!withdrawal.recipientAccount || !withdrawal.recipientBank) {
-        throw new Error("Bank account and bank name are required for bank payout");
-      }
-
-      snippeResponse = await SnippeService.createBankPayout({
-        amount: withdrawal.amount,
-        currency: withdrawal.currency,
-        channel: "bank",
-        recipientAccount: withdrawal.recipientAccount,
-        recipientBank: withdrawal.recipientBank,
-        recipientName: withdrawal.recipientName,
-        narration: `SSDomada withdrawal - ${withdrawal.reseller.companyName}`,
-        webhookUrl,
-        metadata: {
-          withdrawalId: withdrawal.id,
-          resellerId: withdrawal.resellerId,
-        },
-      }, idempotencyKey);
+    } else if (!withdrawal.recipientAccount || !withdrawal.recipientBank) {
+      throw new Error("Account number and bank are required for bank payout");
     }
 
-    // 4. Handle Snippe response
-    if (!snippeResponse.success) {
-      // Mark withdrawal as failed, refund wallet
+    const snippe = await SnippeService.createPayout(
+      {
+        amount: withdrawal.amount,
+        currency: withdrawal.currency,
+        channel: withdrawal.channel === "MOBILE" ? "mobile" : "bank",
+        provider: detectMobileProvider(withdrawal.recipientPhone),
+        recipientPhone: withdrawal.recipientPhone || undefined,
+        recipientAccount: withdrawal.recipientAccount || undefined,
+        recipientBank: withdrawal.recipientBank || undefined,
+        recipientName: withdrawal.recipientName,
+        narration,
+        webhookUrl,
+        metadata: {
+          withdrawalId: withdrawal.id,
+          resellerId: withdrawal.resellerId,
+        },
+      },
+      idempotencyKey,
+    );
+
+    if (!snippe.success || !snippe.reference) {
+      // Snippe rejected the request — refund wallet & mark rejected.
       await prisma.$transaction([
         prisma.withdrawal.update({
           where: { id: withdrawalId },
-          data: { status: "REJECTED", adminNote: `Payout failed: ${snippeResponse.message}` },
+          data: {
+            status: "REJECTED",
+            adminNote: `Payout failed: ${snippe.message || "unknown"}`.slice(0, 500),
+          },
         }),
         prisma.reseller.update({
           where: { id: withdrawal.resellerId },
           data: { walletBalance: { increment: withdrawal.amount } },
         }),
       ]);
-
-      throw new Error(`Payout failed: ${snippeResponse.message}`);
+      throw new Error(`Payout failed: ${snippe.message || "unknown"}`);
     }
 
-    // 5. Create Payout record and update withdrawal status
     const payout = await prisma.payout.create({
       data: {
-        snippeReference: snippeResponse.reference,
+        snippeReference: snippe.reference,
         resellerId: withdrawal.resellerId,
         withdrawalId: withdrawal.id,
         amount: withdrawal.amount,
-        fee: snippeResponse.fee,
-        total: snippeResponse.total,
+        fee: snippe.fee,
+        total: snippe.total || withdrawal.amount + snippe.fee,
         channel: withdrawal.channel,
         recipientPhone: withdrawal.recipientPhone,
         recipientAccount: withdrawal.recipientAccount,
         recipientBank: withdrawal.recipientBank,
         recipientName: withdrawal.recipientName,
         status: "PENDING",
-        narration: `SSDomada withdrawal - ${withdrawal.reseller.companyName}`,
+        narration,
         idempotencyKey,
       },
     });
 
-    // Update withdrawal to PROCESSING
     await prisma.withdrawal.update({
       where: { id: withdrawalId },
       data: { status: "PROCESSING" },
@@ -118,57 +112,86 @@ export class PayoutService {
   }
 
   /**
-   * Handle Snippe payout webhook (payout.completed / payout.failed)
+   * Handle the Snippe webhook for a payout event.
+   * Idempotent: re-deliveries of the same status are no-ops.
    */
-  static async handlePayoutWebhook(reference: string, status: string, metadata?: Record<string, string>) {
+  static async handlePayoutWebhook(event: SnippeWebhookEvent) {
+    const reference = event.reference;
+    const status = event.status?.toLowerCase();
+
     const payout = await prisma.payout.findUnique({
       where: { snippeReference: reference },
       include: { withdrawal: true },
     });
 
-    if (!payout) throw new Error(`Payout not found: ${reference}`);
-    if (payout.status === "COMPLETED") return payout; // Already processed
+    if (!payout) {
+      console.warn(`[Payout.handleWebhook] no payout for reference=${reference}`);
+      return null;
+    }
+
+    // Already settled — short-circuit.
+    if (
+      (payout.status === "COMPLETED" && status === "completed") ||
+      (payout.status === "FAILED" && status === "failed") ||
+      (payout.status === "REVERSED" && status === "reversed")
+    ) {
+      return payout;
+    }
+
+    const metadata = serialiseMetadata(event);
 
     if (status === "completed") {
-      // Payout successful
       await prisma.$transaction([
         prisma.payout.update({
           where: { id: payout.id },
           data: { status: "COMPLETED", completedAt: new Date(), metadata },
         }),
-        ...(payout.withdrawalId ? [
-          prisma.withdrawal.update({
-            where: { id: payout.withdrawalId },
-            data: { status: "COMPLETED", processedAt: new Date() },
-          }),
-        ] : []),
+        ...(payout.withdrawalId
+          ? [
+              prisma.withdrawal.update({
+                where: { id: payout.withdrawalId },
+                data: { status: "COMPLETED", processedAt: new Date() },
+              }),
+            ]
+          : []),
       ]);
-    } else if (status === "failed" || status === "reversed") {
-      // Payout failed — refund reseller wallet
+      return prisma.payout.findUnique({ where: { id: payout.id } });
+    }
+
+    if (status === "failed" || status === "reversed") {
+      const nextPayoutStatus = status === "reversed" ? "REVERSED" : "FAILED";
+      const reason = event.failureReason || `Payout ${status}`;
       await prisma.$transaction([
         prisma.payout.update({
           where: { id: payout.id },
-          data: { status: status === "reversed" ? "REVERSED" : "FAILED", metadata },
+          data: { status: nextPayoutStatus, metadata },
         }),
-        ...(payout.withdrawalId ? [
-          prisma.withdrawal.update({
-            where: { id: payout.withdrawalId },
-            data: { status: "REJECTED", adminNote: `Payout ${status}` },
-          }),
-        ] : []),
+        ...(payout.withdrawalId
+          ? [
+              prisma.withdrawal.update({
+                where: { id: payout.withdrawalId },
+                data: {
+                  status: "REJECTED",
+                  adminNote: reason.slice(0, 500),
+                },
+              }),
+            ]
+          : []),
         prisma.reseller.update({
           where: { id: payout.resellerId },
           data: { walletBalance: { increment: payout.amount } },
         }),
       ]);
+      return prisma.payout.findUnique({ where: { id: payout.id } });
     }
 
     return payout;
   }
 
-  /**
-   * List payouts for a reseller
-   */
+  // ---------------------------------------------------------------
+  // Lookups
+  // ---------------------------------------------------------------
+
   static async listByReseller(resellerId: string, page = 1, limit = 20) {
     const [payouts, total] = await Promise.all([
       prisma.payout.findMany({
@@ -179,16 +202,11 @@ export class PayoutService {
       }),
       prisma.payout.count({ where: { resellerId } }),
     ]);
-
     return { payouts, total, page, limit };
   }
 
-  /**
-   * List all payouts (Super Admin)
-   */
   static async listAll(page = 1, limit = 20, status?: string) {
-    const where = status ? { status: status as any } : {};
-
+    const where = status ? ({ status: status as any }) : {};
     const [payouts, total] = await Promise.all([
       prisma.payout.findMany({
         where,
@@ -201,7 +219,49 @@ export class PayoutService {
       }),
       prisma.payout.count({ where }),
     ]);
-
     return { payouts, total, page, limit };
+  }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function buildWebhookUrl(): string {
+  const base = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  return base ? `${base}/api/webhooks/snippe` : "/api/webhooks/snippe";
+}
+
+/**
+ * Best-effort mobile money provider detection from a Tanzanian phone number.
+ * Snippe accepts this hint so the disbursement goes to the right network without
+ * relying on number portability lookups. Returns undefined when unsure.
+ */
+function detectMobileProvider(phone: string | null | undefined): SnippeMobileProvider | undefined {
+  if (!phone) return undefined;
+  const digits = phone.replace(/[^0-9]/g, "");
+  // Match against the 9-digit national number regardless of "+255" / "0" prefix.
+  const local = digits.slice(-9);
+  if (local.length < 9) return undefined;
+  const prefix = local.slice(0, 2);
+
+  // Airtel: 68, 69, 78
+  if (["68", "69", "78"].includes(prefix)) return "airtel";
+  // Vodacom M-Pesa: 74, 75, 76
+  if (["74", "75", "76"].includes(prefix)) return "mpesa";
+  // Tigo Mixx by Yas: 65, 67, 71
+  if (["65", "67", "71"].includes(prefix)) return "mixx";
+  // Halotel: 61, 62
+  if (["61", "62"].includes(prefix)) return "halotel";
+  return undefined;
+}
+
+function serialiseMetadata(event: SnippeWebhookEvent) {
+  try {
+    return JSON.parse(JSON.stringify(event.payload));
+  } catch {
+    return undefined;
   }
 }

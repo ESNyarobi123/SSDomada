@@ -4,64 +4,92 @@ import { PaymentService } from "@/server/services/payment.service";
 import { PayoutService } from "@/server/services/payout.service";
 import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 
-// ============================================================
-// POST /api/webhooks/snippe
-// Handles all Snippe webhooks: payment.completed, payout.completed, etc.
-// ============================================================
+// Snippe expects fast responses (< 30s) and retries on non-2xx.
+// We process the event before returning, but the work is small and idempotent.
+export const dynamic = "force-dynamic";
 
+/**
+ * POST /api/webhooks/snippe
+ *
+ * Receives Snippe payment + payout events.
+ *
+ * Security:
+ *   - Verifies HMAC-SHA256 over `{X-Webhook-Timestamp}.{raw_body}` using
+ *     SNIPPE_WEBHOOK_SECRET (constant-time comparison + replay protection).
+ *
+ * Routing:
+ *   - `payment.*`  → ResellerPlanService when `metadata.type == "reseller_plan"`,
+ *                    otherwise → PaymentService.
+ *   - `payout.*`   → PayoutService.
+ *
+ * Idempotency:
+ *   - Every service short-circuits on already-final records, so safe to retry.
+ */
 export async function POST(req: NextRequest) {
-  try {
-    // 1. Get raw body and signature for verification
-    const rawBody = await req.text();
-    const signature = req.headers.get("x-snippe-signature") || "";
+  const rawBody = await req.text();
+  const signature = req.headers.get("x-webhook-signature");
+  const timestamp = req.headers.get("x-webhook-timestamp");
 
-    // 2. Verify webhook signature
-    const isValid = SnippeService.verifyWebhookSignature(rawBody, signature);
-    if (!isValid) {
-      console.error("[Webhook] Invalid Snippe signature");
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-    }
-
-    // 3. Parse the webhook payload
-    const payload = JSON.parse(rawBody);
-    const { event, reference, status } = payload;
-
-    console.log(`[Webhook] Received: ${event} | ref: ${reference} | status: ${status}`);
-
-    // 4. Route to appropriate handler
-    const isResellerPlan = payload?.metadata?.type === "reseller_plan";
-
-    switch (event) {
-      case "payment.completed":
-        if (isResellerPlan) {
-          await ResellerPlanService.handlePaymentCompleted(reference);
-        } else {
-          await PaymentService.handleWebhook(reference, status, payload);
-        }
-        break;
-      case "payment.failed":
-      case "payment.expired":
-        // Reseller-plan failures leave the subscription PAST_DUE — surface via UI
-        if (!isResellerPlan) {
-          await PaymentService.handleWebhook(reference, status, payload);
-        }
-        break;
-
-      case "payout.completed":
-      case "payout.failed":
-      case "payout.reversed":
-        await PayoutService.handlePayoutWebhook(reference, status, payload);
-        break;
-
-      default:
-        console.warn(`[Webhook] Unknown event: ${event}`);
-    }
-
-    // 5. Always return 200 to acknowledge receipt
-    return NextResponse.json({ received: true });
-  } catch (error) {
-    console.error("[Webhook] Error processing:", error);
-    // Still return 200 to prevent Snippe from retrying on our errors
-    return NextResponse.json({ received: true, error: "Processing error" });
+  const verification = SnippeService.verifyWebhookSignature(rawBody, signature, timestamp);
+  if (!verification.ok) {
+    console.error(`[Snippe Webhook] signature rejected: ${verification.reason}`);
+    return NextResponse.json(
+      { error: "Invalid signature", reason: verification.reason },
+      { status: 401 },
+    );
   }
+
+  const event = SnippeService.parseWebhookEvent(rawBody);
+  if (!event) {
+    return NextResponse.json({ error: "Unparseable webhook body" }, { status: 400 });
+  }
+
+  console.log(
+    `[Snippe Webhook] type=${event.type} ref=${event.reference} status=${event.status}`,
+  );
+
+  try {
+    const family = event.type.split(".")[0];
+    const isResellerPlan = event.metadata.type === "reseller_plan";
+
+    if (family === "payment") {
+      if (event.type === "payment.completed") {
+        if (isResellerPlan) {
+          await ResellerPlanService.handlePaymentCompleted(event.reference);
+        } else {
+          await PaymentService.handleWebhook(event);
+        }
+      } else if (
+        event.type === "payment.failed" ||
+        event.type === "payment.voided" ||
+        event.type === "payment.expired"
+      ) {
+        if (!isResellerPlan) {
+          // For reseller plans: subscription stays PAST_DUE until paid; surfaced in UI.
+          await PaymentService.handleWebhook(event);
+        }
+      } else {
+        console.warn(`[Snippe Webhook] unknown payment event: ${event.type}`);
+      }
+    } else if (family === "payout") {
+      if (
+        event.type === "payout.completed" ||
+        event.type === "payout.failed" ||
+        event.type === "payout.reversed"
+      ) {
+        await PayoutService.handlePayoutWebhook(event);
+      } else {
+        console.warn(`[Snippe Webhook] unknown payout event: ${event.type}`);
+      }
+    } else {
+      console.warn(`[Snippe Webhook] ignoring unknown family=${family} type=${event.type}`);
+    }
+  } catch (error) {
+    // Return 200 so Snippe stops retrying on our internal mistakes — we'd rather
+    // surface the error in logs / admin tooling than block the merchant queue.
+    console.error("[Snippe Webhook] processing error:", error);
+    return NextResponse.json({ received: true, processed: false });
+  }
+
+  return NextResponse.json({ received: true, processed: true });
 }

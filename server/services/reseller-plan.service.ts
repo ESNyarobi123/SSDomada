@@ -116,23 +116,25 @@ export class ResellerPlanService {
       return { subscription: sub, checkoutUrl: null, requiresPayment: false };
     }
 
-    // Paid flow — create Snippe payment session
-    const idempotencyKey = SnippeService.generateIdempotencyKey();
+    // Paid flow — create Snippe payment session (hosted checkout)
+    const idempotencyKey = SnippeService.generateIdempotencyKey("plan");
     const reseller = await prisma.reseller.findUnique({
       where: { id: opts.resellerId },
       include: { user: { select: { email: true, name: true } } },
     });
     if (!reseller) throw new Error("Reseller not found");
 
-    const snippe = await SnippeService.createPaymentSession(
+    const snippe = await SnippeService.createSession(
       {
         amount: plan.price,
         currency: plan.currency,
-        customerPhone: opts.customerPhone || reseller.phone || undefined,
-        customerEmail: reseller.user.email,
-        customerName: reseller.user.name || reseller.companyName,
         description: `SSDomada ${plan.name} (${plan.interval.toLowerCase()})`,
-        callbackUrl: opts.callbackUrl,
+        customer: {
+          name: reseller.user.name || reseller.companyName,
+          phone: opts.customerPhone || reseller.phone || undefined,
+          email: reseller.user.email,
+        },
+        redirectUrl: opts.callbackUrl,
         webhookUrl: opts.webhookUrl,
         metadata: {
           type: "reseller_plan",
@@ -144,7 +146,9 @@ export class ResellerPlanService {
       idempotencyKey,
     );
 
-    if (!snippe.success) throw new Error(snippe.message || "Payment init failed");
+    if (!snippe.success || !snippe.reference) {
+      throw new Error(snippe.message || "Payment init failed");
+    }
 
     // Pre-create pending subscription with PAST_DUE → flip to ACTIVE in webhook
     const sub = await (prisma as any).resellerPlanSubscription.upsert({
