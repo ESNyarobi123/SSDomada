@@ -181,11 +181,43 @@ export function OmadaPortalNetworkGuide() {
           </p>
         </Step>
 
-        <Step n={5} title="Save, provision, and test">
+        <Step n={5} title="Hotspot Operator account (REQUIRED for auto sign-in)">
+          <p>
+            After a customer pays, SSDomada must call <code className="text-gold/90">POST /portal/auth</code> on the Omada
+            Controller to flip the device from <strong className="text-white">Sign in to network</strong> to{" "}
+            <strong className="text-white">Connected</strong>. That API needs a Hotspot Operator login.
+          </p>
+          <ol className="list-decimal pl-5 space-y-1 text-onyx-300 text-xs mt-2">
+            <li>
+              Omada Controller →{" "}
+              <strong className="text-white">Site Settings → Authentication → Hotspot → Operators</strong>.
+            </li>
+            <li>
+              Create a dedicated operator (e.g. <code className="text-gold/90">ssdomada-portal</code>) with a strong password. Do NOT reuse the Controller admin login.
+            </li>
+            <li>Grant access to <strong className="text-white">all sites</strong> the SSDomada deployment manages.</li>
+            <li>
+              Set these env vars on the SSDomada server and restart the app / redeploy Docker:
+              <pre className="mt-2 text-[11px] font-mono leading-relaxed text-onyx-300 whitespace-pre-wrap border border-white/5 rounded-lg p-3 bg-black/30">
+{`OMADA_URL="https://<your-controller>:<port>"
+OMADA_HOTSPOT_USERNAME="ssdomada-portal"
+OMADA_HOTSPOT_PASSWORD="<long random password>"
+# Only for self-signed controllers in dev:
+# OMADA_HOTSPOT_TLS_INSECURE="true"`}
+              </pre>
+            </li>
+          </ol>
+          <p className="text-xs text-onyx-500 mt-2">
+            Without these, RADIUS will still record the session but Omada won&apos;t release the captive portal hold — the customer sees a successful payment but the phone keeps saying <em>Sign in to network</em>.
+          </p>
+        </Step>
+
+        <Step n={6} title="Save, provision, and test">
           <p>Apply / save in Omada and wait for AP provisioning. On a phone: forget the Wi‑Fi → connect again → you should see <strong className="text-white">Sign in to network</strong> or the portal opens automatically. Complete a test payment if Snippe is live.</p>
           <ul className="list-disc pl-5 space-y-1 text-onyx-400 text-xs mt-2">
             <li>If the portal never opens: revisit Step 4 (pre-auth list).</li>
             <li>If the portal opens but payments fail: add missing payment hostnames to pre-auth.</li>
+            <li>If payment succeeds but Wi‑Fi keeps showing &quot;Sign in to network&quot;: re-check Step 5 (Hotspot Operator).</li>
             <li>Optional API sync (when Open API works): <code className="text-gold/80">POST /api/v1/reseller/omada/sync-portal</code> — pre-auth remains manual in Omada.</li>
           </ul>
         </Step>

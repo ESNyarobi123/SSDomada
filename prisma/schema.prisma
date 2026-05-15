@@ -799,8 +799,12 @@ model PortalSession {
   clientMac     String    // connecting device MAC
   clientIp      String?
   apMac         String?   // access point MAC
-  ssid          String?
+  ssid          String?   // legacy alias kept for back-compat
+  ssidName      String?   // External Portal v2 redirect parameter
+  radioId       Int?      // 0 = 2.4 GHz, 1 = 5 GHz (from Omada redirect)
   nasId         String?   // NAS identifier from Omada
+  omadaSiteId   String?   // Omada-side site id from `site=` redirect param
+  omadaT        String?   // raw Omada timestamp string from `t=` redirect param
   redirectUrl   String?   // original URL the client was trying to access
   status        String    @default("PENDING") // PENDING → PAYING → AUTHORIZED → EXPIRED
   packageId     String?   // selected package

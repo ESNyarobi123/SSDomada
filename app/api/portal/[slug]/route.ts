@@ -26,12 +26,29 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 
   try {
     const { searchParams } = new URL(req.url);
+    // Required for Omada External Portal v2 callback:
+    //   clientMac, apMac, ssidName, radioId, site, t, redirectUrl
     const clientMac = searchParams.get("clientMac") || searchParams.get("client_mac") || "";
     const apMac = searchParams.get("apMac") || searchParams.get("ap_mac") || "";
-    const ssid = searchParams.get("ssid") || "";
+    const ssidName = searchParams.get("ssidName") || searchParams.get("ssid") || "";
+    const radioIdRaw =
+      searchParams.get("radioId") ?? searchParams.get("radio_id") ?? "";
+    const radioId =
+      radioIdRaw !== "" && Number.isFinite(Number(radioIdRaw)) ? Number(radioIdRaw) : null;
+    const omadaSiteId = searchParams.get("site") || "";
+    const omadaT = searchParams.get("t") || "";
     const nasId = searchParams.get("nasId") || searchParams.get("nas_id") || "";
-    const redirectUrl = searchParams.get("url") || searchParams.get("redirect_url") || "";
-    const clientIp = req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "";
+    const redirectUrl =
+      searchParams.get("redirectUrl") ||
+      searchParams.get("url") ||
+      searchParams.get("redirect_url") ||
+      "";
+    const clientIpFromOmada = searchParams.get("clientIp") || searchParams.get("client_ip") || "";
+    const clientIp =
+      clientIpFromOmada ||
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip") ||
+      "";
 
     // 1. Find reseller by brandSlug
     const reseller = await prisma.reseller.findUnique({
@@ -102,28 +119,46 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     // 5. Create or update portal session
     let portalSession = null;
     if (clientMac) {
-      // Check for existing pending session
+      const normalisedMac = normalizeMac(clientMac);
+      const normalisedApMac = apMac ? normalizeMac(apMac) : null;
+
+      // Reuse pending sessions for the same MAC within the last 30 minutes so
+      // refreshes / OS connectivity probes don't churn rows. Always refresh the
+      // captured Omada parameters on each visit because they change per redirect
+      // (timestamp, AP, radio).
       const existingSession = await prisma.portalSession.findFirst({
         where: {
           resellerId: reseller.id,
-          clientMac: normalizeMac(clientMac),
+          clientMac: normalisedMac,
           status: { in: ["PENDING", "PAYING"] },
-          createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) }, // last 30 min
+          createdAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
         },
+        orderBy: { createdAt: "desc" },
       });
 
+      const sessionData = {
+        clientIp: clientIp || undefined,
+        apMac: normalisedApMac || undefined,
+        ssid: ssidName || undefined,
+        ssidName: ssidName || undefined,
+        radioId: radioId ?? undefined,
+        omadaSiteId: omadaSiteId || undefined,
+        omadaT: omadaT || undefined,
+        nasId: nasId || undefined,
+        redirectUrl: redirectUrl || undefined,
+      } satisfies Record<string, unknown>;
+
       if (existingSession) {
-        portalSession = existingSession;
+        portalSession = await prisma.portalSession.update({
+          where: { id: existingSession.id },
+          data: sessionData,
+        });
       } else {
         portalSession = await prisma.portalSession.create({
           data: {
             resellerId: reseller.id,
-            clientMac: normalizeMac(clientMac),
-            clientIp,
-            apMac,
-            ssid,
-            nasId,
-            redirectUrl,
+            clientMac: normalisedMac,
+            ...sessionData,
           },
         });
       }

@@ -1,4 +1,9 @@
 import { OmadaClient } from "@/server/lib/omada-client";
+import {
+  OmadaPortalClient,
+  type OmadaPortalAuthInput,
+  type OmadaPortalAuthResult,
+} from "@/server/lib/omada-portal-client";
 import { prisma } from "@/server/lib/prisma";
 import type { OmadaSite, OmadaDevice, OmadaClient as OmadaClientType, OmadaApiResponse } from "@/types/omada";
 
@@ -330,12 +335,38 @@ export class OmadaService {
   }
 
   /**
-   * Authorize a client MAC address on Omada (grant WiFi access)
+   * Authorise a client on Omada using the External Portal v2 callback.
+   *
+   * This is the **only** correct flow when the SSID uses
+   * "External Portal Server" — Omada won't let traffic through until the
+   * portal calls `POST /portal/auth` with the parameters Omada handed to the
+   * portal in the redirect (clientMac, apMac, ssidName, radioId, site, t).
+   *
+   * Requires a Hotspot Operator account on the controller; see
+   * `OmadaPortalClient`.
+   *
+   * @param input  Portal redirect parameters + session duration (ms).
+   * @returns Result with `ok=true` on success or a diagnostic message.
    */
-  static async authorizeClient(omadaSiteId: string, clientMac: string) {
+  static async authorizeExternalPortalClient(
+    input: OmadaPortalAuthInput,
+  ): Promise<OmadaPortalAuthResult> {
+    const normalised: OmadaPortalAuthInput = {
+      ...input,
+      clientMac: normaliseMacHyphen(input.clientMac),
+      apMac: normaliseMacHyphen(input.apMac),
+    };
+    return OmadaPortalClient.authorise(normalised);
+  }
+
+  /**
+   * Legacy OpenAPI authorize for controller-built-in guest portals.
+   * Kept for non-external-portal flows; do NOT use for external portals.
+   */
+  static async authorizeClient(omadaSiteId: string, clientMac: string, durationMs?: number) {
     return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${clientMac}/authorize`,
-      { authorizeMac: clientMac }
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/authorize`,
+      durationMs ? { time: durationMs } : {},
     );
   }
 
@@ -344,8 +375,8 @@ export class OmadaService {
    */
   static async deauthorizeClient(omadaSiteId: string, clientMac: string) {
     return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${clientMac}/unauthorize`,
-      { unauthorizeMac: clientMac }
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/unauthorize`,
+      {}
     );
   }
 
@@ -1291,4 +1322,16 @@ export class OmadaService {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   }
+}
+
+/**
+ * Normalise a MAC address into Omada's canonical `AA-BB-CC-DD-EE-FF` form.
+ * Accepts colon-separated, hyphen-separated, or unseparated input.
+ * Returns the trimmed original if it doesn't look like a valid MAC so the
+ * caller still sees informative errors from the controller.
+ */
+function normaliseMacHyphen(mac: string): string {
+  const hex = (mac || "").replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  if (hex.length !== 12) return (mac || "").trim();
+  return hex.match(/.{2}/g)!.join("-");
 }

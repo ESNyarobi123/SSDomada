@@ -58,7 +58,29 @@ function formatRemaining(s: number) {
   return `${sec}s`;
 }
 
-const OMADA_FORWARD_KEYS = ["clientMac", "client_mac", "apMac", "ap_mac", "ssid", "nasId", "nas_id", "url", "preview"] as const;
+// Omada External Portal v2 redirect parameters. Every key the controller
+// might send must be forwarded to /api/portal/[slug] so the server can
+// authorize the client against Omada once payment completes.
+const OMADA_FORWARD_KEYS = [
+  "clientMac",
+  "client_mac",
+  "clientIp",
+  "client_ip",
+  "apMac",
+  "ap_mac",
+  "ssid",
+  "ssidName",
+  "nasId",
+  "nas_id",
+  "radioId",
+  "radio_id",
+  "site",
+  "t",
+  "url",
+  "redirectUrl",
+  "redirect_url",
+  "preview",
+] as const;
 
 export default function PortalPageClient() {
   const params = useParams();

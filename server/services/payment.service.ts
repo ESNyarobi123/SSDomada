@@ -380,6 +380,7 @@ export class PaymentService {
 
       const pkg = subscription.package;
       const sessionTimeoutSeconds = pkg.durationMinutes * 60;
+      const sessionTimeoutMs = sessionTimeoutSeconds * 1000;
       const expiresAt = subscription.expiresAt;
 
       const radiusUser = await RadiusService.createAccess({
@@ -398,6 +399,15 @@ export class PaymentService {
         maxSessions: pkg.maxDevices,
       });
 
+      // Load the captured portal redirect parameters BEFORE updating the row
+      // so we still have them when calling Omada (they're stable, but it makes
+      // the call site easier to reason about).
+      const portalSession = opts.portalSessionId
+        ? await prisma.portalSession.findUnique({
+            where: { id: opts.portalSessionId },
+          })
+        : null;
+
       if (opts.portalSessionId) {
         await prisma.portalSession.update({
           where: { id: opts.portalSessionId },
@@ -412,24 +422,103 @@ export class PaymentService {
         });
       }
 
-      try {
-        const site = await prisma.site.findFirst({
-          where: { resellerId: opts.resellerId, omadaSiteId: { not: null } },
-          orderBy: { createdAt: "asc" },
-        });
-        if (site?.omadaSiteId) {
-          await OmadaService.authorizeClient(site.omadaSiteId, opts.clientMac);
-          console.log(`[Omada] Client authorized: MAC=${opts.clientMac} site=${site.omadaSiteId}`);
-        }
-      } catch (omadaErr) {
-        console.error("[Omada] Failed to authorize client after payment:", omadaErr);
-      }
+      // Tell Omada the client is now authorised so traffic stops being
+      // intercepted by the captive portal. For SSIDs using "External Portal
+      // Server" we MUST call `/portal/auth` on the controller — the OpenAPI
+      // guest-authorize endpoint doesn't work for external portals.
+      await PaymentService.authoriseOnOmada({
+        resellerId: opts.resellerId,
+        clientMac: opts.clientMac,
+        portalSession,
+        durationMs: sessionTimeoutMs,
+      });
 
       console.log(
         `[RADIUS] Access granted MAC=${opts.clientMac} expiresAt=${expiresAt.toISOString()} timeout=${sessionTimeoutSeconds}s`,
       );
     } catch (radiusError) {
       console.error("[RADIUS] Failed to create credentials after payment:", radiusError);
+    }
+  }
+
+  /**
+   * Push the client into the Omada "authorised" state via External Portal v2.
+   *
+   * Strategy:
+   *   1. If we captured the full set of redirect params (clientMac, apMac,
+   *      ssidName, radioId, site), call the documented `/portal/auth` flow.
+   *   2. Otherwise fall back to the OpenAPI guest authorise (covers SSIDs
+   *      that aren't using External Portal v2 — best-effort only).
+   *
+   * Either path is non-fatal: RADIUS auth is the source of truth for whether
+   * the customer paid; we only need Omada to release the captive portal hold.
+   */
+  private static async authoriseOnOmada(opts: {
+    resellerId: string;
+    clientMac: string;
+    portalSession: {
+      apMac: string | null;
+      ssidName: string | null;
+      ssid: string | null;
+      radioId: number | null;
+      omadaSiteId: string | null;
+      omadaT: string | null;
+    } | null;
+    durationMs: number;
+  }): Promise<void> {
+    const session = opts.portalSession;
+    const apMac = session?.apMac || "";
+    const ssidName = session?.ssidName || session?.ssid || "";
+    const radioId = session?.radioId ?? null;
+    const omadaSiteId = session?.omadaSiteId || "";
+    const omadaT = session?.omadaT || undefined;
+
+    const hasExternalPortalParams =
+      Boolean(apMac) && Boolean(ssidName) && radioId !== null && Boolean(omadaSiteId);
+
+    if (hasExternalPortalParams) {
+      try {
+        const result = await OmadaService.authorizeExternalPortalClient({
+          clientMac: opts.clientMac,
+          apMac,
+          ssidName,
+          radioId: radioId!,
+          site: omadaSiteId,
+          time: opts.durationMs,
+          t: omadaT,
+        });
+        if (result.ok) {
+          console.log(
+            `[Omada] External portal authorised MAC=${opts.clientMac} site=${omadaSiteId} ssid=${ssidName}`,
+          );
+          return;
+        }
+        console.error(
+          `[Omada] External portal authorise failed MAC=${opts.clientMac}: ${result.message ?? "unknown"} (errorCode=${result.errorCode ?? "n/a"})`,
+        );
+      } catch (err) {
+        console.error("[Omada] External portal authorise threw:", err);
+      }
+    } else {
+      console.warn(
+        `[Omada] Missing External Portal v2 params for MAC=${opts.clientMac} (apMac=${apMac}, ssidName=${ssidName}, radioId=${radioId}, site=${omadaSiteId}). Falling back to OpenAPI guest authorise.`,
+      );
+    }
+
+    // Fallback / non-external-portal SSIDs.
+    try {
+      const site = await prisma.site.findFirst({
+        where: { resellerId: opts.resellerId, omadaSiteId: { not: null } },
+        orderBy: { createdAt: "asc" },
+      });
+      if (site?.omadaSiteId) {
+        await OmadaService.authorizeClient(site.omadaSiteId, opts.clientMac, opts.durationMs);
+        console.log(
+          `[Omada] OpenAPI authorise sent MAC=${opts.clientMac} site=${site.omadaSiteId}`,
+        );
+      }
+    } catch (omadaErr) {
+      console.error("[Omada] OpenAPI guest authorise failed:", omadaErr);
     }
   }
 
