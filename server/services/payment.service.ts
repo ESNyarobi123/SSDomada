@@ -471,8 +471,6 @@ export class PaymentService {
     const ssidName = session?.ssidName || session?.ssid || "";
     const radioId = session?.radioId ?? null;
     const omadaSiteId = session?.omadaSiteId || "";
-    const omadaT = session?.omadaT || undefined;
-
     const hasExternalPortalParams =
       Boolean(apMac) && Boolean(ssidName) && radioId !== null && Boolean(omadaSiteId);
 
@@ -485,7 +483,6 @@ export class PaymentService {
           radioId: radioId!,
           site: omadaSiteId,
           time: opts.durationMs,
-          t: omadaT,
         });
         if (result.ok) {
           console.log(
