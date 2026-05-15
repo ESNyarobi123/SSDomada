@@ -557,14 +557,32 @@ export class SnippeService {
     signature: string | null,
     timestamp: string | null,
     toleranceSeconds: number = WEBHOOK_TIMESTAMP_TOLERANCE_SEC,
-  ): { ok: true } | { ok: false; reason: string } {
+  ):
+    | { ok: true }
+    | {
+        ok: false;
+        reason: string;
+        debug?: {
+          secretLen: number;
+          secretPrefix: string;
+          bodyLen: number;
+          tsHeader: string;
+          computedPrefix: string;
+          receivedPrefix: string;
+        };
+      } {
     if (!SNIPPE_WEBHOOK_SECRET) {
       return { ok: false, reason: "SNIPPE_WEBHOOK_SECRET not configured" };
     }
     if (!signature) return { ok: false, reason: "missing X-Webhook-Signature header" };
     if (!timestamp) return { ok: false, reason: "missing X-Webhook-Timestamp header" };
 
-    const ts = Number.parseInt(timestamp, 10);
+    // Use the RAW timestamp string from the header for the HMAC message — the
+    // Snippe spec hashes against the exact string they sent. Re-serialising from
+    // a parsed integer is byte-identical for normal seconds, but defensively
+    // matching the docs example removes a whole class of subtle bugs.
+    const rawTimestamp = timestamp.trim();
+    const ts = Number.parseInt(rawTimestamp, 10);
     if (!Number.isFinite(ts)) return { ok: false, reason: "invalid timestamp" };
 
     const now = Math.floor(Date.now() / 1000);
@@ -572,19 +590,36 @@ export class SnippeService {
       return { ok: false, reason: "timestamp outside tolerance window" };
     }
 
+    const cleanSignature = signature.trim();
+
     const expected = crypto
       .createHmac("sha256", SNIPPE_WEBHOOK_SECRET)
-      .update(`${ts}.${rawBody}`)
+      .update(`${rawTimestamp}.${rawBody}`)
       .digest("hex");
 
-    const sigBuf = safeBuffer(signature);
+    const sigBuf = safeBuffer(cleanSignature);
     const expBuf = safeBuffer(expected);
 
     if (sigBuf.length !== expBuf.length) {
-      return { ok: false, reason: "signature length mismatch" };
+      return {
+        ok: false,
+        reason: `signature length mismatch (got=${sigBuf.length} expected=${expBuf.length})`,
+      };
     }
     if (!crypto.timingSafeEqual(sigBuf, expBuf)) {
-      return { ok: false, reason: "signature mismatch" };
+      return {
+        ok: false,
+        reason: "signature mismatch",
+        // Bubble up diagnostic info so the route can log it without exposing secrets.
+        debug: {
+          secretLen: SNIPPE_WEBHOOK_SECRET.length,
+          secretPrefix: SNIPPE_WEBHOOK_SECRET.slice(0, 6),
+          bodyLen: rawBody.length,
+          tsHeader: rawTimestamp,
+          computedPrefix: expected.slice(0, 12),
+          receivedPrefix: cleanSignature.slice(0, 12),
+        },
+      } as const;
     }
 
     return { ok: true };

@@ -293,6 +293,68 @@ export class PaymentService {
     return payment;
   }
 
+  /**
+   * Defensive reconciliation: when the captive portal poll has been waiting
+   * too long, pull the live status from Snippe and apply it locally.
+   *
+   * This is the safety net for missed/rejected webhooks (e.g. signature drift,
+   * downtime). Idempotent — defers to {@link handleWebhook} which short-circuits
+   * if the payment is already final.
+   *
+   * @returns the (possibly updated) payment, or null if nothing to reconcile.
+   */
+  static async reconcileFromSnippe(paymentId: string) {
+    const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) return null;
+    if (payment.status === "COMPLETED" || payment.status === "FAILED" || payment.status === "EXPIRED") {
+      return payment;
+    }
+    if (!payment.snippeReference || payment.snippeReference.startsWith("pending_")) {
+      return payment;
+    }
+
+    const result = await SnippeService.getPayment(payment.snippeReference);
+    if (!result.success) {
+      console.warn(
+        `[Payment.reconcile] Snippe lookup failed for ${payment.snippeReference}: ${result.message ?? "unknown"}`,
+      );
+      return payment;
+    }
+
+    const status = (result.status || "").toLowerCase();
+    if (!status || status === "pending" || status === "processing") {
+      return payment;
+    }
+
+    // Reuse the webhook code path by constructing a synthetic event mirroring
+    // the real Snippe shape. handleWebhook is idempotent.
+    const eventType: string =
+      status === "completed"
+        ? "payment.completed"
+        : status === "expired"
+          ? "payment.expired"
+          : status === "voided" || status === "cancelled"
+            ? "payment.voided"
+            : "payment.failed";
+
+    const metadata = readMetadataFromRaw(result.raw);
+
+    const synthetic = {
+      id: undefined,
+      type: eventType,
+      reference: payment.snippeReference,
+      status,
+      amount: result.amount,
+      metadata,
+      payload: result.raw,
+    } as SnippeWebhookEvent;
+
+    console.log(
+      `[Payment.reconcile] applying snippe state paymentId=${payment.id} ref=${payment.snippeReference} status=${status}`,
+    );
+    return PaymentService.handleWebhook(synthetic);
+  }
+
   // ---------------------------------------------------------------
   // Side-effects — granting access + notifying
   // ---------------------------------------------------------------
@@ -500,4 +562,22 @@ function serialiseMetadata(event: SnippeWebhookEvent) {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Pull a string-only metadata bag out of an arbitrary Snippe payload.
+ * Mirrors `SnippeService.parseWebhookEvent` for synthetic reconciliation events.
+ */
+function readMetadataFromRaw(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  // Live `getPayment` returns the API envelope: { data: { metadata: {...} } }
+  const data: any = (raw as any).data ?? raw;
+  const meta = data && typeof data === "object" ? data.metadata : undefined;
+  if (!meta || typeof meta !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (v == null) continue;
+    out[k] = typeof v === "string" ? v : JSON.stringify(v);
+  }
+  return out;
 }

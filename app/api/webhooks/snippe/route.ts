@@ -32,7 +32,10 @@ export async function POST(req: NextRequest) {
 
   const verification = SnippeService.verifyWebhookSignature(rawBody, signature, timestamp);
   if (!verification.ok) {
-    console.error(`[Snippe Webhook] signature rejected: ${verification.reason}`);
+    console.error(
+      `[Snippe Webhook] signature rejected: ${verification.reason}`,
+      verification.debug ? { debug: verification.debug } : "",
+    );
     return NextResponse.json(
       { error: "Invalid signature", reason: verification.reason },
       { status: 401 },
