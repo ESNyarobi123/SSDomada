@@ -1,6 +1,8 @@
 # Pre-authentication access (captive portal) — reference hostnames
 
-Omada (and most controllers) let you allow specific **URLs / IPs / domains** before the user completes portal login. Phones and laptops **probe well-known hosts** to learn whether the network is “free internet” or **captive**; if those probes are blocked or broken, users may not get the sign-in sheet (or payments may fail).
+Omada (and most controllers) let you allow specific **URLs / IPs / domains** before the user completes portal login. This is the captive portal "walled garden": keep it small. It should normally include only SSDomada, payment checkout hosts that must open in the user's browser, and the Omada Controller host/IP if the guest VLAN or ACL blocks the controller redirect.
+
+Do **not** normally add OS connectivity-check probe hosts (Google / Apple / Microsoft) to Pre-Authentication Access. Phones and laptops use those probes to decide whether the network is captive. If you allow the probes through to the public internet, Android / Windows / iOS can decide the network is already online or partially online and skip the sign-in sheet, often showing a blank captive browser such as `data:text/html,`.
 
 SSDomada does **not** push this list to Omada via Open API today (TP-Link’s public docs/community threads do not expose a stable “set pre-auth list” endpoint for all builds). Configure it **manually** in the controller, using the table below as a checklist.
 
@@ -24,20 +26,19 @@ SSDomada does **not** push this list to Omada via Open API today (TP-Link’s pu
 **Always include your own stack (replace with your real domains):**
 
 - Public app (portal pages, API, static uploads): e.g. `ssdomada.site` (and `www.` if you use it).
-- Snippe: derive host from `SNIPPE_API_URL` (e.g. `api.snippe.co.tz`) plus any checkout / CDN hostnames Snippe documents in their dashboard or support.
+- Omada Controller public host/IP only if clients must reach it before Omada redirects them to the external portal: e.g. `server.ssdomada.site` and the controller public `/32`.
+- Snippe browser checkout hosts if the customer browser is redirected to hosted checkout. For direct mobile-money STK push, SSDomada calls Snippe server-side, so `api.snippe.co.tz` is usually not required for the phone.
 
-**OS captive detection (commonly cited in operator / Android community threads):**
+**Do not add these as general pre-auth entries:**
 
-- `captive.apple.com` — Apple hotspot / captive detection (widely referenced; see Apple Developer link above).
-- `www.apple.com` — sometimes used alongside Apple checks (community / firewall guides).
-- `connectivitycheck.gstatic.com` — Android / Google connectivity checks (see Android captive portal docs and AOSP `CaptivePortalProbeSpec`).
-- `clients3.google.com` — often listed in Android captive / firewall threads (e.g. Stack Exchange discussions on mis-detection).
-- `www.msftconnecttest.com` — Windows NCSI text probe (Microsoft Learn NCSI / captive portal docs).
-- `dns.msftncsi.com` — Windows NCSI DNS probe hostname (Microsoft Learn).
+- `connectivitycheck.gstatic.com`
+- `clients3.google.com`
+- `www.msftconnecttest.com`
+- `dns.msftncsi.com`
+- `captive.apple.com`
+- `www.apple.com`
 
-**Optional (only if TLS inspection or strict firewall breaks things):**
-
-- Other `*.gstatic.com` / `*.google.com` entries only if your monitoring shows blocks — keep the list as small as possible for security.
+Let Omada intercept or redirect OS probes. Only temporarily allow one of these while debugging a very specific platform issue, and remove it again after the test.
 
 ---
 
@@ -87,7 +88,7 @@ Hizi ni hatua **kwa mpangilio**. Sehemu ya SSDomada (dashboard) na sehemu ya **O
    - Angalia majibu: `sites[].sync.ok`, `portalUrl`, na `openSsidNames` — lazima ziendane na SSID zako **wazi** zilizo na `omadaSsidId`.
 
 5. **URL ya umma (mazingira ya server)** — jukumu la admin / deploy  
-   `NEXT_PUBLIC_APP_URL` (au `OMADA_PORTAL_PUBLIC_BASE_URL`) lazima iwe **HTTPS** halisi inayofikiwa na controller na simu (mfano `https://ssdomada.site`). Hii ndiyo msingi wa **External Portal URL** inayotumwa Omada.
+   `NEXT_PUBLIC_APP_URL` (au `OMADA_PORTAL_PUBLIC_BASE_URL`) lazima iwe **HTTPS** halisi inayofikiwa na controller na simu (mfano `https://ssdomada.site`). Hii ndiyo msingi wa **External Portal URL** inayotumwa Omada. Usitumie `http://localhost:3000` kwenye production.
 
 ### Sehemu B — Omada Controller (mkono — pre-authentication)
 
@@ -102,10 +103,11 @@ Hizi ni hatua **kwa mpangilio**. Sehemu ya SSDomada (dashboard) na sehemu ya **O
    - **External Portal URL** inapaswa kuwa kama `https://…/portal/{brandSlug}` (sawa na `portalUrl` kutoka sync).  
    - Thibitisha portal imeambatanishwa na **SSID** / wireless network sahihi (kwa UI ya Omada).
 
-9. **Pre-Authentication Access (hapa ndipo “Google / Apple / Microsoft”)**  
+9. **Pre-Authentication Access (walled garden ndogo)**  
    - Nenda **Portal** → **Access Control** / **Pre-Authentication Access** (jina linatofautiana na toleo la Omada).  
-   - Ongeza **URL au hostname** kwa kila moja inayohitajika **kabla** ya mteja kumaliza login (angalia jedwali “Suggested hostname allowlist” hapo juu).  
-   - **Hakikisha** umeongeza: domain ya app yako (`ssdomada.site`), na host ya **Snippe** (kutoka `SNIPPE_API_URL`), pamoja na `captive.apple.com`, `connectivitycheck.gstatic.com`, `clients3.google.com`, `www.msftconnecttest.com`, `dns.msftncsi.com`, nk. kama orodha ya juu.  
+   - Ongeza **URL au hostname** kwa kila kitu kinachohitajika **kabla** ya mteja kumaliza login (angalia jedwali “Suggested hostname allowlist” hapo juu).  
+   - **Hakikisha** umeongeza: domain ya app yako (`ssdomada.site`), controller host/IP ikiwa guest VLAN/ACL inaihitaji, na host za **Snippe checkout** ikiwa browser inaenda Snippe.  
+   - **Usiongeze** `connectivitycheck.gstatic.com`, `clients3.google.com`, `www.msftconnecttest.com`, `dns.msftncsi.com`, `captive.apple.com`, au `www.apple.com` kama allowlist ya kawaida. Hizo ni probe domains; kuziacha ziende internet kabla ya login kunaweza kuzuia portal pop-up.  
    - Hii hatua **haiwezi** kwa sasa kufanywa peke yake kutoka SSDomada bila API ya wazi ya Omada — **lazima mkono** kwenye controller.
 
 10. **Hifadhi** mipangilio ya Omada na subiri provisioning (kadri ya controller).
@@ -118,6 +120,6 @@ Hizi ni hatua **kwa mpangilio**. Sehemu ya SSDomada (dashboard) na sehemu ya **O
 
 ### Tatizo la kawaida
 
-- **Portal haionekani / hakuna “Sign in to network”:** ongeza / sahihisha **Pre-Authentication Access** (hatua 9).  
+- **Portal haionekani / hakuna “Sign in to network”:** hakikisha **External Portal URL ni HTTPS sahihi**, ondoa OS probe domains kwenye **Pre-Authentication Access**, kisha sahihisha walled garden ya SSDomada / controller / payment tu (hatua 8-9).  
 - **Portal haifunguki kabisa:** angalia **External URL** na HTTPS + `NEXT_PUBLIC_APP_URL`.  
 - **SSID haipo kwenye portal Omada:** endesha **sync-portal** (hatua 4) au angalia SSID ni **open** na iko na `omadaSsidId` kwenye SSDomada.

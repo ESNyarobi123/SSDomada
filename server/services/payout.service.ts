@@ -1,4 +1,5 @@
 import { prisma } from "@/server/lib/prisma";
+import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 import {
   SnippeService,
   type SnippeWebhookEvent,
@@ -226,9 +227,7 @@ export class PayoutService {
 // ============================================================
 
 function buildWebhookUrl(): string {
-  const base = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "")
-    .trim()
-    .replace(/\/+$/, "");
+  const base = getPortalPublicBaseUrl();
   return base ? `${base}/api/webhooks/snippe` : "/api/webhooks/snippe";
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { ResellerPlanService } from "@/server/services/reseller-plan.service";
+import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 
 /**
  * GET /api/v1/reseller/billing
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     if (action === "subscribe") {
       if (!body.planId) return apiError("planId is required", 400, "VALIDATION");
 
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "";
+      const baseUrl = getPortalPublicBaseUrl();
       const result = await ResellerPlanService.subscribe({
         resellerId: ctx.resellerId,
         planId: body.planId,

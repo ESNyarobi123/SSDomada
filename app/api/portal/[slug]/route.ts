@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { RadiusService } from "@/server/services/radius.service";
+import { PaymentService } from "@/server/services/payment.service";
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
@@ -73,6 +74,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     // 2. Check if client already has active RADIUS access
     let isAuthorized = false;
     let remainingSeconds = 0;
+    let activeRadiusUser: { id: string; expiresAt: Date } | null = null;
 
     if (clientMac) {
       const existing = await prisma.radiusUser.findFirst({
@@ -86,6 +88,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       });
 
       if (existing) {
+        activeRadiusUser = { id: existing.id, expiresAt: existing.expiresAt };
         isAuthorized = true;
         remainingSeconds = Math.floor((existing.expiresAt.getTime() - Date.now()) / 1000);
       }
@@ -146,6 +149,13 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         omadaT: omadaT || undefined,
         nasId: nasId || undefined,
         redirectUrl: redirectUrl || undefined,
+        ...(activeRadiusUser
+          ? {
+              status: "RADIUS_AUTHORIZED",
+              radiusUserId: activeRadiusUser.id,
+              expiresAt: activeRadiusUser.expiresAt,
+            }
+          : {}),
       } satisfies Record<string, unknown>;
 
       if (existingSession) {
@@ -161,6 +171,24 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
             ...sessionData,
           },
         });
+      }
+
+      if (activeRadiusUser && portalSession) {
+        try {
+          const activated = await PaymentService.retryPortalActivation(portalSession.id, reseller.id);
+          if (activated) {
+            portalSession = activated;
+            isAuthorized = activated.status === "AUTHORIZED";
+            remainingSeconds =
+              isAuthorized && activated.expiresAt
+                ? Math.max(0, Math.floor((activated.expiresAt.getTime() - Date.now()) / 1000))
+                : 0;
+          }
+        } catch (activationErr) {
+          console.warn("[Portal GET] active paid client Omada activation failed:", activationErr);
+          isAuthorized = false;
+          remainingSeconds = 0;
+        }
       }
     }
 

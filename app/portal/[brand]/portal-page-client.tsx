@@ -94,7 +94,7 @@ export default function PortalPageClient() {
   const [selected, setSelected] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [paying, setPaying] = useState(false);
-  const [paymentStatus, setPaymentStatus] = useState<"idle" | "redirecting" | "polling" | "success" | "failed">("idle");
+  const [paymentStatus, setPaymentStatus] = useState<"idle" | "redirecting" | "polling" | "success" | "failed" | "activation_failed">("idle");
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   useEffect(() => {
@@ -115,7 +115,12 @@ export default function PortalPageClient() {
         } else {
           setData(j.data);
           setRemainingSeconds(j.data.client.remainingSeconds || 0);
-          if (j.data.client.isAuthorized) setPaymentStatus("success");
+          if (j.data.session?.status === "OMADA_AUTH_FAILED") {
+            setPaymentStatus("activation_failed");
+            setErr("Payment received, but WiFi activation failed. Please ask the operator to check Omada.");
+          } else if (j.data.client.isAuthorized) {
+            setPaymentStatus("success");
+          }
         }
       } catch {
         if (!cancelled) setErr("Failed to connect");
@@ -143,6 +148,10 @@ export default function PortalPageClient() {
         if (j.success && j.data?.status === "AUTHORIZED") {
           setPaymentStatus("success");
           setRemainingSeconds(j.data.remainingSeconds || 0);
+          clearInterval(t);
+        } else if (j.success && j.data?.status === "OMADA_AUTH_FAILED") {
+          setPaymentStatus("activation_failed");
+          setErr(j.data.activationError || "Payment received, but WiFi activation failed. Please ask the operator to check Omada.");
           clearInterval(t);
         }
       } catch {
@@ -266,6 +275,24 @@ export default function PortalPageClient() {
             A payment prompt has been sent to <strong className="text-gold">{phone}</strong>. Enter your mobile money PIN to complete.
           </p>
           <p className="text-xs text-onyx-500">Waiting for confirmation…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (paymentStatus === "activation_failed") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6" style={bgStyle}>
+        <div className="max-w-md w-full bg-onyx-900/90 backdrop-blur-xl rounded-3xl border border-amber-500/30 p-8 text-center shadow-2xl">
+          <div className="w-20 h-20 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-6">
+            <Wifi className="w-10 h-10 text-amber-300" />
+          </div>
+          <h1 className="text-2xl font-black text-white mb-2">Payment Received</h1>
+          <p className="text-onyx-300 mb-4">
+            WiFi access is paid, but the network has not released this device yet.
+          </p>
+          {err ? <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">{err}</p> : null}
+          {data.session?.clientMac && <div className="mt-4 text-xs text-onyx-500 font-mono">Device: {data.session.clientMac}</div>}
         </div>
       </div>
     );

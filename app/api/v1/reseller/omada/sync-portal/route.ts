@@ -31,8 +31,12 @@ export async function POST(req: NextRequest) {
 
     const base = getPortalPublicBaseUrl();
     const portalUrl = base ? `${base}/portal/${ctx.brandSlug}` : "";
-    if (!portalUrl.startsWith("http")) {
-      return apiError("Set NEXT_PUBLIC_APP_URL or OMADA_PORTAL_PUBLIC_BASE_URL to an https origin.", 400, "NO_PUBLIC_BASE");
+    if (!isPublicHttpsBase(base)) {
+      return apiError(
+        "Set NEXT_PUBLIC_APP_URL or OMADA_PORTAL_PUBLIC_BASE_URL to a public https origin, e.g. https://ssdomada.site.",
+        400,
+        "NO_PUBLIC_HTTPS_BASE",
+      );
     }
 
     const portalName = await getResellerOmadaPortalName(ctx.resellerId, ctx.companyName);
@@ -95,12 +99,22 @@ export async function POST(req: NextRequest) {
       preAuthentication: {
         configuredViaApi: false,
         doc: "docs/captive-preauth-allowlist.md",
-        note: "Add hosts (Apple/Google/Microsoft + your app + Snippe) under Omada → Portal → Pre-Authentication Access manually.",
+        note: "Add only SSDomada, Omada Controller if needed, and browser checkout hosts under Omada → Portal → Pre-Authentication Access. Do not normally add OS probe hosts such as Google/Microsoft/Apple connectivity checks.",
       },
       sites: results,
     });
   } catch (e) {
     console.error("[Reseller omada/sync-portal POST]", e);
     return apiError("Sync failed", 500);
+  }
+}
+
+function isPublicHttpsBase(base: string): boolean {
+  try {
+    const u = new URL(base);
+    if (u.protocol !== "https:") return false;
+    return !["localhost", "127.0.0.1", "::1"].includes(u.hostname);
+  } catch {
+    return false;
   }
 }

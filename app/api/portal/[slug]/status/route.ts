@@ -79,6 +79,37 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    if (
+      session.status !== "AUTHORIZED" &&
+      session.paymentId &&
+      Date.now() - session.updatedAt.getTime() < 20 * 60 * 1000
+    ) {
+      try {
+        const payment = await prisma.payment.findFirst({
+          where: {
+            OR: [
+              { id: session.paymentId },
+              { snippeReference: session.paymentId },
+            ],
+            status: "COMPLETED",
+          },
+          select: { id: true },
+        });
+        if (payment) {
+          await PaymentService.retryPortalActivation(session.id, reseller.id);
+          session = await prisma.portalSession.findFirst({
+            where: { id: sessionId, resellerId: reseller.id },
+          });
+        }
+      } catch (activationErr) {
+        console.warn("[Portal Status] Omada activation retry failed:", activationErr);
+      }
+    }
+
+    if (!session) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+
     let remainingSeconds = 0;
     if (session.status === "AUTHORIZED" && session.expiresAt) {
       remainingSeconds = Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1000));
@@ -94,6 +125,10 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
         expiresAt: session.expiresAt,
         remainingSeconds,
         redirectUrl: session.redirectUrl,
+        activationError:
+          session.status === "OMADA_AUTH_FAILED"
+            ? "Payment received, but Omada has not released this device yet. Check Omada Hotspot Operator credentials and captured portal parameters."
+            : null,
       },
     });
   } catch (error) {

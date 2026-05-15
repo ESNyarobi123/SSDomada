@@ -89,19 +89,23 @@ export function OmadaPortalNetworkGuide() {
       host,
       `www.${host}`,
       ``,
-      `# Snippe (payments — add any extra checkout/CDN hosts from Snippe dashboard)`,
-      snippeHost,
+      `# Omada Controller (only if guest VLAN/ACL blocks the controller redirect)`,
+      `server.${host}`,
       ``,
-      `# OS captive detection (keep unless you know your network does not need them)`,
-      `captive.apple.com`,
-      `www.apple.com`,
-      `connectivitycheck.gstatic.com`,
-      `clients3.google.com`,
-      `www.msftconnecttest.com`,
-      `dns.msftncsi.com`,
+      `# Snippe browser checkout only (mobile STK push is server-side)`,
+      snippeHost,
     ],
     [host, snippeHost]
   );
+
+  const blockedProbeBlock = [
+    "connectivitycheck.gstatic.com",
+    "clients3.google.com",
+    "www.msftconnecttest.com",
+    "dns.msftncsi.com",
+    "captive.apple.com",
+    "www.apple.com",
+  ].join("\n");
 
   const preAuthBlock = preAuthLines.join("\n");
 
@@ -162,7 +166,7 @@ export function OmadaPortalNetworkGuide() {
           <p>
             In Omada go to something like <strong className="text-white">Authentication → Portal → Access Control</strong> or{" "}
             <strong className="text-white">Pre-Authentication Access</strong>. Add each hostname (or URL rule your build supports) so{" "}
-            <strong className="text-white">before login</strong> the phone can reach Apple/Google/Microsoft connectivity checks, your app, and Snippe. Without this, users may stay &quot;connected&quot; but never get the sign-in sheet or payments may fail.
+            <strong className="text-white">before login</strong> the phone can reach only SSDomada, Omada Controller if needed, and payment checkout hosts. Keep this list small; allowing OS probe hosts can stop the sign-in sheet from opening.
           </p>
           <div className="mt-3 flex flex-wrap items-start justify-between gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
             <div className="min-w-0 flex-1">
@@ -177,8 +181,17 @@ export function OmadaPortalNetworkGuide() {
             <CopyButton text={preAuthBlock} label="Copy pre-auth host list" />
           </div>
           <p className="text-xs text-onyx-500 mt-2">
-            Edit the first lines if your production domain differs. Add any extra Snippe hosts from their documentation.
+            Edit the first lines if your production domain differs. Add extra Snippe checkout/CDN hosts only if the browser is redirected there.
           </p>
+          <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3">
+            <div className="text-[10px] font-black uppercase tracking-wider text-amber-200 mb-2">Do not add as normal pre-auth entries</div>
+            <pre className="text-[11px] leading-relaxed text-amber-100/90 whitespace-pre-wrap font-mono border border-amber-500/10 rounded-lg p-3 bg-black/25">
+              {blockedProbeBlock}
+            </pre>
+            <p className="mt-2 text-xs text-amber-100/80">
+              These are OS connectivity probes. If they are allowed through before login, Android / Windows / iOS may think the network is already online and skip the captive portal.
+            </p>
+          </div>
         </Step>
 
         <Step n={5} title="Hotspot Operator account (REQUIRED for auto sign-in)">
@@ -215,7 +228,7 @@ OMADA_HOTSPOT_PASSWORD="<long random password>"
         <Step n={6} title="Save, provision, and test">
           <p>Apply / save in Omada and wait for AP provisioning. On a phone: forget the Wi‑Fi → connect again → you should see <strong className="text-white">Sign in to network</strong> or the portal opens automatically. Complete a test payment if Snippe is live.</p>
           <ul className="list-disc pl-5 space-y-1 text-onyx-400 text-xs mt-2">
-            <li>If the portal never opens: revisit Step 4 (pre-auth list).</li>
+            <li>If the portal never opens: confirm the External Portal URL is HTTPS, then revisit Step 4.</li>
             <li>If the portal opens but payments fail: add missing payment hostnames to pre-auth.</li>
             <li>If payment succeeds but Wi‑Fi keeps showing &quot;Sign in to network&quot;: re-check Step 5 (Hotspot Operator).</li>
             <li>Optional API sync (when Open API works): <code className="text-gold/80">POST /api/v1/reseller/omada/sync-portal</code> — pre-auth remains manual in Omada.</li>

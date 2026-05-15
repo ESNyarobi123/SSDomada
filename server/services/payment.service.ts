@@ -1,5 +1,6 @@
 import type { PaymentType } from "@prisma/client";
 import { prisma } from "@/server/lib/prisma";
+import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 import { calculateRevenueSplit } from "@/server/utils";
 import {
   SnippeService,
@@ -412,9 +413,8 @@ export class PaymentService {
         await prisma.portalSession.update({
           where: { id: opts.portalSessionId },
           data: {
-            status: "AUTHORIZED",
+            status: "RADIUS_AUTHORIZED",
             radiusUserId: radiusUser.id,
-            authorizedAt: new Date(),
             expiresAt,
           },
         }).catch((err) => {
@@ -426,18 +426,30 @@ export class PaymentService {
       // intercepted by the captive portal. For SSIDs using "External Portal
       // Server" we MUST call `/portal/auth` on the controller — the OpenAPI
       // guest-authorize endpoint doesn't work for external portals.
-      await PaymentService.authoriseOnOmada({
+      const omadaAuth = await PaymentService.authoriseOnOmada({
         resellerId: opts.resellerId,
         clientMac: opts.clientMac,
         portalSession,
         durationMs: sessionTimeoutMs,
       });
 
+      if (opts.portalSessionId) {
+        await prisma.portalSession.update({
+          where: { id: opts.portalSessionId },
+          data: {
+            status: omadaAuth.ok ? "AUTHORIZED" : "OMADA_AUTH_FAILED",
+            authorizedAt: omadaAuth.ok ? new Date() : null,
+          },
+        }).catch((err) => {
+          console.warn(`[Payment] failed to update Omada auth status for ${opts.portalSessionId}:`, err);
+        });
+      }
+
       console.log(
         `[RADIUS] Access granted MAC=${opts.clientMac} expiresAt=${expiresAt.toISOString()} timeout=${sessionTimeoutSeconds}s`,
       );
-    } catch (radiusError) {
-      console.error("[RADIUS] Failed to create credentials after payment:", radiusError);
+    } catch (accessError) {
+      console.error("[WiFi Access] Failed to create credentials after payment:", accessError);
     }
   }
 
@@ -465,7 +477,7 @@ export class PaymentService {
       omadaT: string | null;
     } | null;
     durationMs: number;
-  }): Promise<void> {
+  }): Promise<{ ok: boolean; message?: string }> {
     const session = opts.portalSession;
     const apMac = session?.apMac || "";
     const ssidName = session?.ssidName || session?.ssid || "";
@@ -488,13 +500,18 @@ export class PaymentService {
           console.log(
             `[Omada] External portal authorised MAC=${opts.clientMac} site=${omadaSiteId} ssid=${ssidName}`,
           );
-          return;
+          return { ok: true };
         }
         console.error(
           `[Omada] External portal authorise failed MAC=${opts.clientMac}: ${result.message ?? "unknown"} (errorCode=${result.errorCode ?? "n/a"})`,
         );
+        return {
+          ok: false,
+          message: result.message || `Omada external portal auth failed (errorCode=${result.errorCode ?? "n/a"})`,
+        };
       } catch (err) {
         console.error("[Omada] External portal authorise threw:", err);
+        return { ok: false, message: err instanceof Error ? err.message : String(err) };
       }
     } else {
       console.warn(
@@ -509,14 +526,48 @@ export class PaymentService {
         orderBy: { createdAt: "asc" },
       });
       if (site?.omadaSiteId) {
-        await OmadaService.authorizeClient(site.omadaSiteId, opts.clientMac, opts.durationMs);
-        console.log(
-          `[Omada] OpenAPI authorise sent MAC=${opts.clientMac} site=${site.omadaSiteId}`,
-        );
+        const result = await OmadaService.authorizeClient(site.omadaSiteId, opts.clientMac, opts.durationMs) as any;
+        if (result?.errorCode == null || result.errorCode === 0) {
+          console.log(
+            `[Omada] OpenAPI authorise sent MAC=${opts.clientMac} site=${site.omadaSiteId}`,
+          );
+          return { ok: true };
+        }
+        const message = result?.msg || `Omada OpenAPI authorise failed (errorCode=${result.errorCode})`;
+        console.error(`[Omada] ${message}`);
+        return { ok: false, message };
       }
+      return { ok: false, message: "No Omada-linked site found for reseller." };
     } catch (omadaErr) {
       console.error("[Omada] OpenAPI guest authorise failed:", omadaErr);
+      return { ok: false, message: omadaErr instanceof Error ? omadaErr.message : String(omadaErr) };
     }
+  }
+
+  static async retryPortalActivation(sessionId: string, resellerId: string) {
+    const session = await prisma.portalSession.findFirst({
+      where: { id: sessionId, resellerId },
+    });
+    if (!session) return null;
+    if (session.status === "AUTHORIZED") return session;
+    if (!session.expiresAt || session.expiresAt <= new Date()) return session;
+    if (!session.radiusUserId) return session;
+
+    const durationMs = Math.max(60_000, session.expiresAt.getTime() - Date.now());
+    const result = await PaymentService.authoriseOnOmada({
+      resellerId,
+      clientMac: session.clientMac,
+      portalSession: session,
+      durationMs,
+    });
+
+    return prisma.portalSession.update({
+      where: { id: session.id },
+      data: {
+        status: result.ok ? "AUTHORIZED" : "OMADA_AUTH_FAILED",
+        authorizedAt: result.ok ? new Date() : null,
+      },
+    });
   }
 
   private static async notifyResellerOfPayment(payment: {
@@ -631,9 +682,7 @@ function buildMetadata(input: Record<string, unknown>): Record<string, string> {
 }
 
 function buildWebhookUrl(): string {
-  const base = (process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || "")
-    .trim()
-    .replace(/\/+$/, "");
+  const base = getPortalPublicBaseUrl();
   return base ? `${base}/api/webhooks/snippe` : "/api/webhooks/snippe";
 }
 

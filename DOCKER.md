@@ -4,6 +4,8 @@
 
 Default environment values in `docker-compose.yml` use **`https://ssdomada.site`** for `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` (Snippe callbacks, portal return URLs, webhooks). Override them in a root `.env` file if you use another domain.
 
+Production warning: Docker Compose automatically reads the root `.env`. Do not leave `NEXTAUTH_URL` or `NEXT_PUBLIC_APP_URL` as `http://localhost:3000` on the server, because Omada portal sync and Snippe callbacks will then point guests/payment providers at localhost instead of the public site.
+
 **Before going live**
 
 1. Point DNS **A** (and **AAAA** if you use IPv6) for `ssdomada.site` (and `www.ssdomada.site` if you use it) to your server’s public IP.
