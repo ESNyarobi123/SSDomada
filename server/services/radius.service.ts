@@ -19,12 +19,13 @@ type OmadaKickTarget = {
   portalSession: { apMac: string; ssidName: string; radioId: number } | null;
 };
 
-const DEFAULT_UNBLOCK_DELAY_MS = 5 * 60 * 1000;
-
-function parseUnblockDelayMs(raw: string | undefined): number {
-  if (!raw) return DEFAULT_UNBLOCK_DELAY_MS;
+function parseUnblockDelayMs(raw: string | undefined): number | null {
+  // Safe default: keep expired clients blocked until a fresh payment arrives.
+  // Set OMADA_UNBLOCK_DELAY_MS to a positive value if you still want timed
+  // auto-unblock behavior.
+  if (!raw || raw.toLowerCase() === "off") return null;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1000) return DEFAULT_UNBLOCK_DELAY_MS;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.min(parsed, 60 * 60 * 1000);
 }
 
@@ -655,21 +656,27 @@ export class RadiusService {
       //    soon as a fresh payment comes in (whichever happens first wins).
       const unblockDelayMs = parseUnblockDelayMs(process.env.OMADA_UNBLOCK_DELAY_MS);
       console.log(
-        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`}, unblockInMs=${unblockDelayMs})`,
+        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`}, unblockInMs=${unblockDelayMs ?? "off"})`,
       );
-      setTimeout(() => {
-        OmadaService.unblockClient(omadaSiteId, clientMac)
-          .then(() => {
-            console.log(
-              `[RADIUS] Auto-unblocked ${label} mac=${clientMac} after ${unblockDelayMs}ms`,
-            );
-          })
-          .catch((err) => {
-            console.warn(
-              `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
-            );
-          });
-      }, unblockDelayMs);
+      if (unblockDelayMs) {
+        setTimeout(() => {
+          OmadaService.unblockClient(omadaSiteId, clientMac)
+            .then(() => {
+              console.log(
+                `[RADIUS] Auto-unblocked ${label} mac=${clientMac} after ${unblockDelayMs}ms`,
+              );
+            })
+            .catch((err) => {
+              console.warn(
+                `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
+              );
+            });
+        }, unblockDelayMs);
+      } else {
+        console.log(
+          `[RADIUS] Auto-unblock disabled ${label} mac=${clientMac} (will unblock on payment/manual action)`,
+        );
+      }
       return { kicked: true, errors };
     }
 
