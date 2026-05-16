@@ -20,9 +20,9 @@ import { RadiusService } from "@/server/services/radius.service";
  *
  * Steps:
  *   1. Revoke their RADIUS rows so they can't auto-reauth.
- *   2. Run the same full force-kick sequence the cron uses:
+ *   2. Run the same force-kick sequence the cron uses:
  *      OpenAPI unauthorize → extPortal/auth deauth (if portal info known) →
- *      block → reconnect → schedule unblock 30s later.
+ *      reconnect.
  *
  * Returns full Omada response so the operator can see what failed if any.
  */

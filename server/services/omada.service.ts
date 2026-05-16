@@ -394,11 +394,12 @@ export class OmadaService {
    * Always pair this with {@link disconnectClient} to forcibly kick the client
    * from the AP so they re-hit the captive portal.
    */
-  static async deauthorizeClient(omadaSiteId: string, clientMac: string) {
-    return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/unauthorize`,
-      {}
-    );
+  static async deauthorizeClient(
+    omadaSiteId: string,
+    clientMac: string,
+  ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
+    const mac = normaliseMacHyphen(clientMac);
+    return OmadaService.callClientAction(omadaSiteId, mac, "unauthorize");
   }
 
   /**
@@ -442,14 +443,14 @@ export class OmadaService {
   }
 
   /**
-   * Internal: post a client action (reconnect/block/unblock) to Omada Open
+   * Internal: post a client action (reconnect/block/unblock/unauthorize) to Omada Open
    * API, trying the canonical path first then the legacy `/cmd/` variant.
    * Returns which path succeeded plus the controller's errorCode for logs.
    */
   private static async callClientAction(
     omadaSiteId: string,
     mac: string,
-    action: "reconnect" | "block" | "unblock",
+    action: "reconnect" | "block" | "unblock" | "unauthorize",
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
     const candidates = [
       `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/${action}`,

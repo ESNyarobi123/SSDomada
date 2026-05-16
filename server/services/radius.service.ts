@@ -19,16 +19,6 @@ type OmadaKickTarget = {
   portalSession: { apMac: string; ssidName: string; radioId: number } | null;
 };
 
-function parseUnblockDelayMs(raw: string | undefined): number | null {
-  // Safe default: keep expired clients blocked until a fresh payment arrives.
-  // Set OMADA_UNBLOCK_DELAY_MS to a positive value if you still want timed
-  // auto-unblock behavior.
-  if (!raw || raw.toLowerCase() === "off") return null;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Math.min(parsed, 60 * 60 * 1000);
-}
-
 const radiusUserEnforcementSelect = {
   id: true,
   resellerId: true,
@@ -560,50 +550,38 @@ export class RadiusService {
   }
 
   /**
-   * Aggressively force a client off Omada — used both by the cron job and
-   * the stale-session sweep.
+   * Force a client back to captive portal.
    *
-   * IMPORTANT: Omada's External Portal v2 API has NO real deauthorisation
-   * endpoint. Re-calling `extPortal/auth` with `time=1` does NOT invalidate
-   * the existing session — Omada keeps the original auth state and the
-   * client can keep using WiFi after we kick them. Reconnect is also
-   * unreliable (returns errorCode=0 but doesn't always actually drop the
-   * association).
+   * Primary strategy (default) follows what works in Omada UI:
+   *   1. OpenAPI `unauthorize`
+   *   2. best-effort External Portal deauth
+   *   3. reconnect
    *
-   * The ONLY way to guarantee the client is kicked is to BLOCK them at the
-   * AP level. Block puts them on the AP blocklist so they cannot associate
-   * at all. We then UNBLOCK after a longer delay (default 5 min) so they
-   * can come back and pay again. If they pay BEFORE the unblock fires, the
-   * payment webhook unblocks immediately and re-authorises.
-   *
-   * The unblock delay is configurable via env `OMADA_UNBLOCK_DELAY_MS`
-   * (default 300_000 = 5 min). Increase if your Omada controller takes
-   * longer to clear stale captive-portal auth state.
-   *
-   * Order of operations:
-   *   1. OpenAPI `unauthorize`   (clears any OpenAPI auth state)
-   *   2. External Portal deauth  (best-effort, may be a no-op)
-   *   3. BLOCK                   (primary kick — drops connection + prevents reassoc)
-   *   4. Reconnect               (best-effort secondary kick)
-   *   5. Schedule UNBLOCK after `OMADA_UNBLOCK_DELAY_MS` so the next
-   *      payment can authorise. Payment webhook can unblock earlier.
+   * Optional hard-block mode exists for explicit admin "block" actions only.
    */
   static async forceKickFromOmada(args: {
     omadaSiteId: string;
     clientMac: string;
     portalSession?: { apMac: string; ssidName: string; radioId: number } | null;
     label: string;
+    hardBlock?: boolean;
   }): Promise<{ kicked: boolean; errors: string[] }> {
-    const { omadaSiteId, clientMac, portalSession, label } = args;
+    const { omadaSiteId, clientMac, portalSession, label, hardBlock = false } = args;
     const errors: string[] = [];
 
-    // 1. Clear OpenAPI auth state (cheap, doesn't hurt if not used).
-    try {
-      await OmadaService.deauthorizeClient(omadaSiteId, clientMac);
-    } catch (err: any) {
-      const message = err?.message || String(err);
-      errors.push(`Omada unauthorize failed ${label} site=${omadaSiteId}: ${message}`);
-      console.warn(`[RADIUS] Omada unauthorize failed ${label}:`, err);
+    // 1. Clear OpenAPI auth state.
+    const unauth = await OmadaService.deauthorizeClient(omadaSiteId, clientMac).catch((err: any) => ({
+      ok: false as const,
+      path: "(threw)" as const,
+      errorCode: undefined,
+      msg: err?.message || String(err),
+    }));
+    if (unauth.ok) {
+      console.log(`[RADIUS] UNAUTHORIZED ${label} mac=${clientMac} site=${omadaSiteId} via ${unauth.path}`);
+    } else {
+      const detail = unauth.msg ?? `errorCode=${unauth.errorCode}`;
+      errors.push(`Omada unauthorize failed ${label} site=${omadaSiteId}: ${detail}`);
+      console.warn(`[RADIUS] Omada unauthorize failed ${label} mac=${clientMac}: ${detail}`);
     }
 
     // 2. External Portal v2 deauth — only works if we have the original
@@ -630,16 +608,7 @@ export class RadiusService {
       }
     }
 
-    // 3. BLOCK — primary force-kick. Adds client to AP blocklist which both
-    //    drops the current association and prevents immediate re-association.
-    const block = await OmadaService.blockClient(omadaSiteId, clientMac).catch((err: any) => ({
-      ok: false as const,
-      path: "(threw)" as const,
-      errorCode: undefined,
-      msg: err?.message || String(err),
-    }));
-
-    // 4. Reconnect (cheap secondary). Some controller builds drop the
+    // 3. Reconnect (cheap secondary). Some controller builds drop the
     //    association on reconnect even when block is rejected.
     const reconnect = await OmadaService.disconnectClient(omadaSiteId, clientMac).catch(
       (err: any) => ({
@@ -650,45 +619,37 @@ export class RadiusService {
       }),
     );
 
-    if (block.ok) {
-      // 5. Schedule UNBLOCK after configured delay so the client can re-pay
-      //    and reconnect. The payment webhook will also call unblock as
-      //    soon as a fresh payment comes in (whichever happens first wins).
-      const unblockDelayMs = parseUnblockDelayMs(process.env.OMADA_UNBLOCK_DELAY_MS);
-      console.log(
-        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`}, unblockInMs=${unblockDelayMs ?? "off"})`,
-      );
-      if (unblockDelayMs) {
-        setTimeout(() => {
-          OmadaService.unblockClient(omadaSiteId, clientMac)
-            .then(() => {
-              console.log(
-                `[RADIUS] Auto-unblocked ${label} mac=${clientMac} after ${unblockDelayMs}ms`,
-              );
-            })
-            .catch((err) => {
-              console.warn(
-                `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
-              );
-            });
-        }, unblockDelayMs);
-      } else {
-        console.log(
-          `[RADIUS] Auto-unblock disabled ${label} mac=${clientMac} (will unblock on payment/manual action)`,
-        );
-      }
-      return { kicked: true, errors };
-    }
-
     if (reconnect.ok) {
-      // Block failed but reconnect succeeded — still considered kicked (best effort).
       console.log(
-        `[RADIUS] reconnect-only kick ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path} (block=${block.msg ?? block.errorCode})`,
+        `[RADIUS] RECONNECTED ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path}`,
       );
       return { kicked: true, errors };
     }
 
-    const detail = `block=${block.msg ?? `errorCode=${block.errorCode}`} reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`}`;
+    // Optional hard-block fallback (explicit admin block flows only).
+    if (hardBlock) {
+      const block = await OmadaService.blockClient(omadaSiteId, clientMac).catch((err: any) => ({
+        ok: false as const,
+        path: "(threw)" as const,
+        errorCode: undefined,
+        msg: err?.message || String(err),
+      }));
+      if (block.ok) {
+        console.log(`[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path}`);
+        return { kicked: true, errors };
+      }
+      const detail = `reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`} block=${block.msg ?? `errorCode=${block.errorCode}`}`;
+      errors.push(`Omada force-kick failed ${label} site=${omadaSiteId}: ${detail}`);
+      console.warn(`[RADIUS] Omada force-kick failed ${label} mac=${clientMac}: ${detail}`);
+      return { kicked: false, errors };
+    }
+
+    // For expiry flow we still treat successful unauthorize as enough.
+    if (unauth.ok) {
+      return { kicked: true, errors };
+    }
+
+    const detail = `unauthorize=${unauth.msg ?? `errorCode=${unauth.errorCode}`} reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`}`;
     errors.push(`Omada force-kick failed ${label} site=${omadaSiteId}: ${detail}`);
     console.warn(`[RADIUS] Omada force-kick failed ${label} mac=${clientMac}: ${detail}`);
     return { kicked: false, errors };

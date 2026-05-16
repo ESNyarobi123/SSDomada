@@ -151,6 +151,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
               ? { apMac: t.apMac, ssidName: t.ssidName, radioId: t.radioId }
               : null,
           label: `block-action reseller=${ctx.resellerId}`,
+          hardBlock: true,
         });
       }
       await logResellerAction(ctx.userId, "client.blocked", "User", id, { mac, reason }, getClientIp(req));
