@@ -386,17 +386,22 @@ export class OmadaService {
   }
 
   /**
-   * Deauthorize a client MAC address (revoke captive-portal auth state).
+   * Deauthorize a client (revoke captive-portal auth state) — the
+   * equivalent of the **"Unauthorize" button** in the Omada Controller UI.
    *
-   * This is what the **"Unauthorize" button** in the Omada Controller UI does.
-   * The documented OpenAPI v1 does **not** expose an `unauthorize` endpoint —
-   * only `block` / `unblock` / `reconnect`. So we:
+   * TP-Link's official support confirmed (community post, 2025-04-21) that
+   * the correct way to "disconnect a captive-portal client via API" on
+   * Omada v5+ is:
    *
-   *   1. Optimistically try the OpenAPI `/cmd/clients/{mac}/unauthorize` path
-   *      (some controller builds expose it there).
-   *   2. Fall back to the legacy `/api/v2/.../cmd/clients/{mac}/unauthorize`
-   *      path with the Hotspot Operator session cookie + CSRF token — that's
-   *      the path the Omada web UI actually uses.
+   *   DELETE /openapi/v1/{omadacId}/sites/{siteId}/clients/{clientMac}
+   *
+   * This is the **only** thing that actually clears an active External
+   * Portal v2 auth state. The Open API v1 has no `unauthorize` endpoint
+   * under `/cmd/`, and the legacy `/api/v2/.../cmd/clients/.../unauthorize`
+   * path returns `-1600 Unsupported request path.` on v5.15+.
+   *
+   * Falls back to the legacy hotspot-session path as a best-effort second
+   * try for older controller builds.
    */
   static async deauthorizeClient(
     omadaSiteId: string,
@@ -404,26 +409,38 @@ export class OmadaService {
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
     const mac = normaliseMacHyphen(clientMac);
 
-    const viaOpenApi = await OmadaService.callClientAction(omadaSiteId, mac, "unauthorize");
-    if (viaOpenApi.ok) return viaOpenApi;
+    const deletePath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}`;
+    try {
+      const res = (await OmadaClient.delete<Record<string, unknown>>(deletePath)) as Record<string, unknown>;
+      const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
+      const msg = typeof res.msg === "string" ? res.msg : undefined;
+      console.log(
+        `[Omada] unauthorize(DELETE) mac=${mac} site=${omadaSiteId} path=${deletePath} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
+      );
+      if (ec === 0) {
+        return { ok: true, path: deletePath, errorCode: ec, msg };
+      }
+      // Real failure — surface it.
+      return { ok: false, path: deletePath, errorCode: ec, msg };
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      console.warn(`[Omada] unauthorize(DELETE) threw mac=${mac} path=${deletePath}: ${message}`);
 
-    // OpenAPI didn't recognise the path (errorCode undefined / not found) —
-    // fall back to the legacy cookie-auth endpoint used by the web UI.
-    const viaLegacy = await OmadaPortalClient.unauthoriseClient({
-      omadaSiteId,
-      clientMac: mac,
-    });
-    if (viaLegacy.ok) {
-      return { ok: true, path: viaLegacy.path, errorCode: viaLegacy.errorCode, msg: viaLegacy.message };
+      // Fallback: legacy hotspot-session unauthorize (older controllers).
+      const viaLegacy = await OmadaPortalClient.unauthoriseClient({
+        omadaSiteId,
+        clientMac: mac,
+      });
+      if (viaLegacy.ok) {
+        return { ok: true, path: viaLegacy.path, errorCode: viaLegacy.errorCode, msg: viaLegacy.message };
+      }
+      return {
+        ok: false,
+        path: viaLegacy.path,
+        errorCode: viaLegacy.errorCode,
+        msg: viaLegacy.message ?? message,
+      };
     }
-
-    // Both failed — return the legacy result (more diagnostic info).
-    return {
-      ok: false,
-      path: viaLegacy.path,
-      errorCode: viaLegacy.errorCode ?? viaOpenApi.errorCode,
-      msg: viaLegacy.message ?? viaOpenApi.msg ?? "Omada unauthorize: no working path",
-    };
   }
 
   /**
