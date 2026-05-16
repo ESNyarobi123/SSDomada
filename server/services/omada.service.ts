@@ -389,39 +389,82 @@ export class OmadaService {
   /**
    * Force the client off the WiFi (drops their association on the AP).
    *
-   * Combined with `deauthorizeClient`, this guarantees an expired user is
-   * actually pushed off the internet — without it Omada keeps existing
-   * connections alive even after auth state changes. The client will
-   * automatically reassociate and hit the captive portal again, where they
-   * will have to pay (or wait until their subscription is renewed).
+   * Omada calls this "reconnect" — the AP disconnects the client and waits
+   * for them to associate again. After expiry their RADIUS auth and Omada
+   * portal auth are both gone, so the captive portal will intercept them.
    *
-   * Omada Open API path:
-   *   POST .../sites/{siteId}/cmd/clients/{AA-BB-CC-DD-EE-FF}/disconnect
+   * Omada Open API path (no `/cmd/` prefix on client actions):
+   *   POST /openapi/v1/{cid}/sites/{sid}/clients/{mac}/reconnect
+   *
+   * Some controller versions only accept the `/cmd/` variant or the legacy
+   * `/api/v2/sites/.../cmd/clients/...` cookie-auth path, so we try the
+   * canonical Open API path first and fall back to the cmd-style on 404.
    */
-  static async disconnectClient(omadaSiteId: string, clientMac: string) {
-    return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/disconnect`,
-      {},
-    );
+  static async disconnectClient(
+    omadaSiteId: string,
+    clientMac: string,
+  ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
+    const mac = normaliseMacHyphen(clientMac);
+    return OmadaService.callClientAction(omadaSiteId, mac, "reconnect");
   }
 
-  /**
-   * Block a client MAC at the AP/site level (persists across reconnects).
-   * Used as a last-resort kick for clients the cron can't otherwise unseat.
-   */
-  static async blockClient(omadaSiteId: string, clientMac: string) {
-    return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/block`,
-      {},
-    );
+  /** Block a client MAC at the site level (persists across reconnects). */
+  static async blockClient(
+    omadaSiteId: string,
+    clientMac: string,
+  ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
+    const mac = normaliseMacHyphen(clientMac);
+    return OmadaService.callClientAction(omadaSiteId, mac, "block");
   }
 
   /** Reverse of {@link blockClient}. */
-  static async unblockClient(omadaSiteId: string, clientMac: string) {
-    return OmadaClient.post(
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/unblock`,
-      {},
-    );
+  static async unblockClient(
+    omadaSiteId: string,
+    clientMac: string,
+  ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
+    const mac = normaliseMacHyphen(clientMac);
+    return OmadaService.callClientAction(omadaSiteId, mac, "unblock");
+  }
+
+  /**
+   * Internal: post a client action (reconnect/block/unblock) to Omada Open
+   * API, trying the canonical path first then the legacy `/cmd/` variant.
+   * Returns which path succeeded plus the controller's errorCode for logs.
+   */
+  private static async callClientAction(
+    omadaSiteId: string,
+    mac: string,
+    action: "reconnect" | "block" | "unblock",
+  ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
+    const candidates = [
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/${action}`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${mac}/${action}`,
+    ];
+
+    let lastResult: { errorCode?: number; msg?: string } = {};
+    for (const path of candidates) {
+      try {
+        const res = (await OmadaClient.post<Record<string, unknown>>(path, {})) as Record<string, unknown>;
+        const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
+        const msg = typeof res.msg === "string" ? res.msg : undefined;
+        if (ec === 0) {
+          return { ok: true, path, errorCode: ec, msg };
+        }
+        lastResult = { errorCode: ec, msg };
+        // 404 / "path not found" → try the next candidate path.
+        const notFound =
+          ec === 404 ||
+          ec === -44112 ||
+          (typeof msg === "string" && /not\s*found|invalid\s*url|404/i.test(msg));
+        if (!notFound) {
+          // Real failure (auth, mac wrong, etc.) — stop retrying alternate paths.
+          return { ok: false, path, errorCode: ec, msg };
+        }
+      } catch (err: any) {
+        lastResult = { msg: err?.message || String(err) };
+      }
+    }
+    return { ok: false, path: candidates[candidates.length - 1], ...lastResult };
   }
 
   // ============================================================

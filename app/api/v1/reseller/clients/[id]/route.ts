@@ -140,9 +140,27 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         if (!t.omadaSiteId) continue;
         try {
           await OmadaService.deauthorizeClient(t.omadaSiteId, t.clientMac);
-          await OmadaService.disconnectClient(t.omadaSiteId, t.clientMac);
         } catch (err) {
-          console.warn(`[Reseller Client PATCH] Omada disconnect failed mac=${mac}:`, err);
+          console.warn(`[Reseller Client PATCH] Omada deauthorize failed mac=${mac}:`, err);
+        }
+        const kick: { ok: boolean; path: string; errorCode?: number; msg?: string } =
+          await OmadaService.disconnectClient(t.omadaSiteId, t.clientMac).catch((err: any) => ({
+            ok: false,
+            path: "(threw)",
+            msg: err?.message || String(err),
+          }));
+        if (!kick.ok) {
+          const block: { ok: boolean; path: string; errorCode?: number; msg?: string } =
+            await OmadaService.blockClient(t.omadaSiteId, t.clientMac).catch((err: any) => ({
+              ok: false,
+              path: "(threw)",
+              msg: err?.message || String(err),
+            }));
+          if (!block.ok) {
+            console.warn(
+              `[Reseller Client PATCH] Omada disconnect/block failed mac=${mac}: kick=${kick.msg ?? kick.errorCode} block=${block.msg ?? block.errorCode}`,
+            );
+          }
         }
       }
       await logResellerAction(ctx.userId, "client.blocked", "User", id, { mac, reason }, getClientIp(req));

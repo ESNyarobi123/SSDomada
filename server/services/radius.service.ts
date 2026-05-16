@@ -293,24 +293,77 @@ export class RadiusService {
       else expired++;
     }
 
-    const [expiredSubscriptions, expiredPortalSessions] = await Promise.all([
-      prisma.subscription.updateMany({
-        where: { status: "ACTIVE", expiresAt: { lte: now } },
-        data: { status: "EXPIRED" },
-      }),
-      prisma.portalSession.updateMany({
-        where: {
-          status: { in: ["AUTHORIZED", "RADIUS_AUTHORIZED", "OMADA_AUTH_FAILED"] },
-          expiresAt: { lte: now },
-        },
-        data: { status: "EXPIRED" },
-      }),
-    ]);
+    const expiredSubscriptions = await prisma.subscription.updateMany({
+      where: { status: "ACTIVE", expiresAt: { lte: now } },
+      data: { status: "EXPIRED" },
+    });
+
+    // Sweep portal sessions whose time has passed but we never disconnected
+    // them on Omada (e.g. left over from earlier deploys with a broken
+    // disconnect path). Kick each before marking EXPIRED.
+    const stalePortalSessions = await prisma.portalSession.findMany({
+      where: {
+        status: { in: ["AUTHORIZED", "RADIUS_AUTHORIZED", "OMADA_AUTH_FAILED"] },
+        expiresAt: { lte: now },
+        omadaSiteId: { not: null },
+      },
+      select: { id: true, omadaSiteId: true, clientMac: true, resellerId: true },
+      take: 500,
+    });
+
+    let staleKicked = 0;
+    for (const session of stalePortalSessions) {
+      if (!session.omadaSiteId) continue;
+      // Skip if we already disconnected this MAC in the active-expired loop above.
+      if (usersToRevoke && Array.from(usersToRevoke.values()).some((u) => u.macAddress === session.clientMac)) {
+        continue;
+      }
+      try {
+        await OmadaService.deauthorizeClient(session.omadaSiteId, session.clientMac);
+      } catch (err) {
+        console.warn(`[RADIUS] stale deauthorize failed mac=${session.clientMac}:`, err);
+      }
+      const kick = await OmadaService.disconnectClient(session.omadaSiteId, session.clientMac).catch(
+        (err: any) => ({
+          ok: false,
+          path: "(threw)" as const,
+          msg: err?.message || String(err),
+        }),
+      );
+      if (kick.ok) {
+        staleKicked++;
+        omadaDeauthorized++;
+        continue;
+      }
+      const block = await OmadaService.blockClient(session.omadaSiteId, session.clientMac).catch(
+        (err: any) => ({
+          ok: false,
+          path: "(threw)" as const,
+          msg: err?.message || String(err),
+        }),
+      );
+      if (block.ok) {
+        staleKicked++;
+        omadaDeauthorized++;
+        setTimeout(() => {
+          OmadaService.unblockClient(session.omadaSiteId!, session.clientMac).catch(() => {});
+        }, 10_000);
+      }
+    }
+
+    const expiredPortalSessions = await prisma.portalSession.updateMany({
+      where: {
+        status: { in: ["AUTHORIZED", "RADIUS_AUTHORIZED", "OMADA_AUTH_FAILED"] },
+        expiresAt: { lte: now },
+      },
+      data: { status: "EXPIRED" },
+    });
 
     return {
       expired,
       dataLimited,
       omadaDeauthorized,
+      staleKicked,
       expiredSubscriptions: expiredSubscriptions.count,
       expiredPortalSessions: expiredPortalSessions.count,
       errors: errors.slice(0, 20),
@@ -386,6 +439,14 @@ export class RadiusService {
     }
 
     const targets = await this.findOmadaDeauthTargets(user);
+    if (targets.length === 0) {
+      errors.push(
+        `Omada disconnect skipped user=${user.username}: no portal session or linked Omada site found for MAC=${user.macAddress ?? "?"}`,
+      );
+      console.warn(
+        `[RADIUS] No Omada disconnect target for user=${user.username} mac=${user.macAddress ?? "?"} — client will keep WiFi until they roam/reauth.`,
+      );
+    }
     for (const target of targets) {
       // 1. Clear captive-portal auth state (works for OpenAPI guest auth flows).
       try {
@@ -399,16 +460,54 @@ export class RadiusService {
       // 2. Kick the client off the AP. CRITICAL for External Portal sessions —
       //    without this the user keeps using their existing connection even
       //    after `unauthorize` succeeds.
-      try {
-        await OmadaService.disconnectClient(target.omadaSiteId, target.clientMac);
+      type OmadaCallResult = { ok: boolean; path: string; errorCode?: number; msg?: string };
+      const kick: OmadaCallResult = await OmadaService.disconnectClient(
+        target.omadaSiteId,
+        target.clientMac,
+      ).catch((err: any) => ({
+        ok: false,
+        path: "(threw)",
+        msg: err?.message || String(err),
+      }));
+      if (kick.ok) {
         omadaDeauthorized++;
         console.log(
-          `[RADIUS] Disconnected expired client user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId}`,
+          `[RADIUS] Disconnected expired client user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId} via ${kick.path}`,
         );
-      } catch (err: any) {
-        const message = err?.message || String(err);
-        errors.push(`Omada disconnect failed user=${user.username} site=${target.omadaSiteId}: ${message}`);
-        console.warn(`[RADIUS] Omada disconnect failed for ${user.username}:`, err);
+      } else {
+        // Fall back to a hard block — block then unblock so the next
+        // payment can re-authorize. This is the only reliable way on some
+        // controller builds where /reconnect is rejected.
+        const block: OmadaCallResult = await OmadaService.blockClient(
+          target.omadaSiteId,
+          target.clientMac,
+        ).catch((err: any) => ({
+          ok: false,
+          path: "(threw)",
+          msg: err?.message || String(err),
+        }));
+        if (block.ok) {
+          omadaDeauthorized++;
+          console.log(
+            `[RADIUS] Blocked expired client (reconnect failed) user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId}`,
+          );
+          // Best-effort: unblock after 10s so future payments work normally.
+          setTimeout(() => {
+            OmadaService.unblockClient(target.omadaSiteId, target.clientMac).catch((err) => {
+              console.warn(
+                `[RADIUS] Delayed unblock failed mac=${target.clientMac}: ${err?.message || err}`,
+              );
+            });
+          }, 10_000);
+        } else {
+          const detail = `disconnect=${kick.msg ?? `errorCode=${kick.errorCode}`} block=${block.msg ?? `errorCode=${block.errorCode}`}`;
+          errors.push(
+            `Omada disconnect+block failed user=${user.username} site=${target.omadaSiteId}: ${detail}`,
+          );
+          console.warn(
+            `[RADIUS] Omada disconnect+block failed user=${user.username} mac=${target.clientMac}: ${detail}`,
+          );
+        }
       }
     }
 

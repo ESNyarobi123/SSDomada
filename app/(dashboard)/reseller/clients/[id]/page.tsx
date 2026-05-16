@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Loader2, ArrowLeft, Ban, ShieldOff } from "lucide-react";
+import { Loader2, ArrowLeft, Ban, ShieldOff, WifiOff } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { formatTzs } from "@/lib/format-currency";
 
@@ -63,6 +63,32 @@ export default function ResellerClientDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function kickMac(macAddr: string) {
+    setMsg(null);
+    setErr(null);
+    const res = await fetch("/api/v1/reseller/clients/kick", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+      },
+      body: JSON.stringify({ mac: macAddr }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(json.error || "Kick failed");
+      return;
+    }
+    const d = json.data || {};
+    if (d.ok) {
+      setMsg(`Kicked ${macAddr} via Omada (${d.reconnect?.path || d.block?.path || "?"})`);
+    } else {
+      const reason = d.reconnect?.msg || d.block?.msg || "controller did not accept the request";
+      setErr(`Omada refused to disconnect ${macAddr}: ${reason}`);
+    }
+  }
 
   async function patch(action: "block" | "unblock", macAddr: string) {
     setMsg(null);
@@ -181,24 +207,35 @@ export default function ResellerClientDetailPage() {
                   <td className="px-4 py-2 text-onyx-400">{s.site.name}</td>
                   <td className="px-4 py-2 text-onyx-500 text-xs">{new Date(s.startedAt).toLocaleString()}</td>
                   <td className="px-4 py-2 text-right">
-                    {u.blockedMacs.includes(s.clientMac.toUpperCase()) ? (
+                    <div className="inline-flex items-center gap-3 justify-end">
                       <button
                         type="button"
-                        onClick={() => void patch("unblock", s.clientMac)}
-                        className="text-xs font-semibold text-emerald-300 hover:underline inline-flex items-center gap-1"
+                        onClick={() => void kickMac(s.clientMac)}
+                        title="Disconnect this device from WiFi now"
+                        className="text-xs font-semibold text-amber-300 hover:underline inline-flex items-center gap-1"
                       >
-                        <ShieldOff className="w-3 h-3" />
-                        Unblock
+                        <WifiOff className="w-3 h-3" />
+                        Kick
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void patch("block", s.clientMac)}
-                        className="text-xs font-semibold text-red-300 hover:underline"
-                      >
-                        Block
-                      </button>
-                    )}
+                      {u.blockedMacs.includes(s.clientMac.toUpperCase()) ? (
+                        <button
+                          type="button"
+                          onClick={() => void patch("unblock", s.clientMac)}
+                          className="text-xs font-semibold text-emerald-300 hover:underline inline-flex items-center gap-1"
+                        >
+                          <ShieldOff className="w-3 h-3" />
+                          Unblock
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void patch("block", s.clientMac)}
+                          className="text-xs font-semibold text-red-300 hover:underline"
+                        >
+                          Block
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
