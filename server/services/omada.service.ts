@@ -388,18 +388,42 @@ export class OmadaService {
   /**
    * Deauthorize a client MAC address (revoke captive-portal auth state).
    *
-   * NOTE: For SSIDs using **External Portal Server**, this OpenAPI command may
-   * be a no-op — those clients are authorised through `extPortal/auth` and the
-   * controller doesn't necessarily honour `cmd/clients/{mac}/unauthorize`.
-   * Always pair this with {@link disconnectClient} to forcibly kick the client
-   * from the AP so they re-hit the captive portal.
+   * This is what the **"Unauthorize" button** in the Omada Controller UI does.
+   * The documented OpenAPI v1 does **not** expose an `unauthorize` endpoint —
+   * only `block` / `unblock` / `reconnect`. So we:
+   *
+   *   1. Optimistically try the OpenAPI `/cmd/clients/{mac}/unauthorize` path
+   *      (some controller builds expose it there).
+   *   2. Fall back to the legacy `/api/v2/.../cmd/clients/{mac}/unauthorize`
+   *      path with the Hotspot Operator session cookie + CSRF token — that's
+   *      the path the Omada web UI actually uses.
    */
   static async deauthorizeClient(
     omadaSiteId: string,
     clientMac: string,
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
     const mac = normaliseMacHyphen(clientMac);
-    return OmadaService.callClientAction(omadaSiteId, mac, "unauthorize");
+
+    const viaOpenApi = await OmadaService.callClientAction(omadaSiteId, mac, "unauthorize");
+    if (viaOpenApi.ok) return viaOpenApi;
+
+    // OpenAPI didn't recognise the path (errorCode undefined / not found) —
+    // fall back to the legacy cookie-auth endpoint used by the web UI.
+    const viaLegacy = await OmadaPortalClient.unauthoriseClient({
+      omadaSiteId,
+      clientMac: mac,
+    });
+    if (viaLegacy.ok) {
+      return { ok: true, path: viaLegacy.path, errorCode: viaLegacy.errorCode, msg: viaLegacy.message };
+    }
+
+    // Both failed — return the legacy result (more diagnostic info).
+    return {
+      ok: false,
+      path: viaLegacy.path,
+      errorCode: viaLegacy.errorCode ?? viaOpenApi.errorCode,
+      msg: viaLegacy.message ?? viaOpenApi.msg ?? "Omada unauthorize: no working path",
+    };
   }
 
   /**

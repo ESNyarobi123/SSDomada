@@ -115,6 +115,121 @@ export class OmadaPortalClient {
     return OmadaPortalClient.authorise({ ...input, time: 1 });
   }
 
+  /**
+   * Call the legacy `unauthorize` endpoint the Omada controller's web UI
+   * uses — i.e. the "Unauthorize" button in Site → Clients. This is the
+   * ONLY thing that actually clears an active External Portal v2 auth
+   * state, because the documented Open API does not expose an
+   * unauthorize endpoint for clients.
+   *
+   * Uses the Hotspot Operator session (TPOMADA_SESSIONID cookie +
+   * CSRF token) that we already maintain for extPortal/auth.
+   *
+   * Tries a small list of historically-documented paths so this keeps
+   * working across controller versions:
+   *   - /api/v2/sites/{siteId}/cmd/clients/{mac}/unauthorize
+   *   - /api/v2/cmd/sites/{siteId}/clients/{mac}/unauthorize
+   *   - /api/v2/hotspot/cmd/sites/{siteId}/clients/{mac}/unauthorize
+   */
+  static async unauthoriseClient(opts: {
+    omadaSiteId: string;
+    clientMac: string;
+  }): Promise<{ ok: boolean; path: string; errorCode?: number; message?: string; httpStatus?: number }> {
+    if (!OmadaPortalClient.isConfigured()) {
+      return {
+        ok: false,
+        path: "(unconfigured)",
+        message: "OMADA hotspot operator credentials not configured",
+      };
+    }
+
+    const tryOnce = async (
+      creds: CredentialBundle,
+    ): Promise<{ ok: boolean; path: string; errorCode?: number; message?: string; httpStatus?: number }> => {
+      const base = OmadaPortalClient.controllerBase();
+      const paths = [
+        `/api/v2/sites/${opts.omadaSiteId}/cmd/clients/${opts.clientMac}/unauthorize`,
+        `/api/v2/cmd/sites/${opts.omadaSiteId}/clients/${opts.clientMac}/unauthorize`,
+        `/api/v2/hotspot/cmd/sites/${opts.omadaSiteId}/clients/${opts.clientMac}/unauthorize`,
+      ];
+
+      let last: { ok: boolean; path: string; errorCode?: number; message?: string; httpStatus?: number } = {
+        ok: false,
+        path: paths[paths.length - 1],
+        message: "no candidate path responded",
+      };
+
+      for (const path of paths) {
+        const url = `${base}${path}`;
+        try {
+          const res = await fetchSafe(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              Cookie: creds.cookie,
+              "Csrf-Token": creds.token,
+            },
+            body: JSON.stringify({}),
+          });
+
+          let parsed: any = null;
+          try {
+            parsed = await res.json();
+          } catch {
+            parsed = null;
+          }
+          const errorCode = typeof parsed?.errorCode === "number" ? parsed.errorCode : undefined;
+          const msg = typeof parsed?.msg === "string" ? parsed.msg : undefined;
+
+          console.log(
+            `[OmadaPortal] unauthorise path=${path} status=${res.status} errorCode=${errorCode ?? "?"} msg=${msg ?? "?"}`,
+          );
+
+          if (errorCode === 0) {
+            return { ok: true, path, errorCode, message: msg, httpStatus: res.status };
+          }
+
+          last = { ok: false, path, errorCode, message: msg ?? `HTTP ${res.status}`, httpStatus: res.status };
+
+          // 404 / "path not found" → try next candidate. Anything else is a real
+          // failure (auth, permission, mac wrong) — bail out so logs are clean.
+          const notFound =
+            res.status === 404 ||
+            errorCode === 404 ||
+            errorCode === -44112 ||
+            errorCode === undefined ||
+            (typeof msg === "string" && /not\s*found|invalid\s*url|404/i.test(msg));
+          if (!notFound) {
+            return last;
+          }
+        } catch (err: any) {
+          const message = err?.message || String(err);
+          console.warn(`[OmadaPortal] unauthorise threw path=${path}: ${message}`);
+          last = { ok: false, path, message };
+        }
+      }
+      return last;
+    };
+
+    try {
+      let creds = await OmadaPortalClient.getCredentials();
+      let result = await tryOnce(creds);
+
+      // CSRF / session expired → relogin once and retry the whole sequence.
+      if (!result.ok && (result.errorCode === -1 || result.errorCode === 401 || result.httpStatus === 401)) {
+        await OmadaPortalClient.invalidateCache();
+        creds = await OmadaPortalClient.getCredentials(true);
+        result = await tryOnce(creds);
+      }
+
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, path: "(threw)", message };
+    }
+  }
+
   private static controllerBase(): string {
     if (!OMADA_URL) throw new OmadaPortalApiError("OMADA_URL is not set");
     if (!OMADA_CONTROLLER_ID) throw new OmadaPortalApiError("OMADA_CONTROLLER_ID is not set");
