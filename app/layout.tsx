@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "SSDomada — Omada WiFi Billing System",
-  description: "Uza WiFi kwa urahisi na Faida Zingi. Captive Portal + Malipo ya Snippe + Usimamizi wa Omada.",
+  description: "Uza WiFi kwa urahisi na faida zaidi. Captive portal, malipo ya simu, na usimamizi wa Omada — mahali pamoja.",
   icons: {
     icon: "/images/SSDomada.png",
     apple: "/images/SSDomada.png",

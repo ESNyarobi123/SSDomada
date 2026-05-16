@@ -70,6 +70,11 @@ export type LandingCopy = {
     titleGrad: string;
     sub: string;
     mostPopular: string;
+    ctaFree: string;
+    ctaPaid: string;
+    loadingPlans: string;
+    plansLoadError: string;
+    trialDays: string;
     plans: { name: string; desc: string; cta: string; features: string[] }[];
   };
   testimonials: {
@@ -135,9 +140,9 @@ const en: LandingCopy = {
     getStarted: "Get Started",
   },
   hero: {
-    poweredBy: "Powered by TP-Link Omada + Snippe Payments",
+    poweredBy: "Built for Omada Wi‑Fi hotspots",
     h1: ["Sell WiFi", "With Less Effort,", "More Revenue"],
-    sub: "Omada WiFi billing — captive portal, Snippe payments, and full control of your access points from one place.",
+    sub: "Branded captive portal, mobile-money payments, and full control of your access points — everything you need to run paid guest Wi‑Fi from one dashboard.",
     subHighlight: "Start earning from your hotspot today.",
     ctaPrimary: "Start free",
     ctaSecondary: "Watch demo",
@@ -184,11 +189,11 @@ const en: LandingCopy = {
       },
       {
         title: "Daily revenue visibility",
-        desc: "Snippe settles straight to your wallet so you always know what you earned.",
+        desc: "See sales as they happen in your dashboard — no more guessing what you earned today.",
       },
       {
         title: "Direct Omada control",
-        desc: "Sync with Omada SDN Controller and manage APs, sites, and status from one dashboard.",
+        desc: "Connect your Omada controller and manage locations, access points, and live status from one dashboard.",
       },
       {
         title: "Branded captive portal",
@@ -200,35 +205,40 @@ const en: LandingCopy = {
       },
       {
         title: "Enterprise-grade security",
-        desc: "FreeRADIUS-backed auth, HTTPS, and sensible defaults so subscriber data stays protected.",
+        desc: "Encrypted connections and automatic session control so guest access stays secure and predictable.",
       },
     ],
   },
   howItWorks: {
     badge: "How it works",
-    title: "Four steps to",
+    title: "Five steps to",
     titleGrad: "paid WiFi",
-    sub: "From signup to first payout in a single afternoon.",
+    sub: "The full reseller journey — from registration and plan choice through Omada setup to your first customer payment.",
     steps: [
       {
         num: "01",
-        title: "Sign up as a reseller",
-        desc: "Create your account for free, add your business profile, and you are ready to configure.",
+        title: "Sign up & choose your plan",
+        desc: "Create your reseller account (name, email, password, company & brand), then pick Starter, Pro, or Enterprise — start with a free trial or pay online on the plan page.",
       },
       {
         num: "02",
-        title: "Connect your Omada stack",
-        desc: "Link your Omada SDN Controller — access points and sites appear in SSDomada automatically.",
+        title: "Connect your Omada network",
+        desc: "Add locations (sites), adopt access points on your controller, and set up the guest SSID in the dashboard so SSDomada knows your venue.",
       },
       {
         num: "03",
-        title: "Publish your packages",
-        desc: "Define hourly, daily, weekly, or monthly plans with speeds, caps, and device limits.",
+        title: "Packages & captive portal",
+        desc: "Create WiFi packages (hourly, daily, weekly…) for guests and brand your captive portal — logo, colors, welcome text, and public portal URL.",
       },
       {
         num: "04",
-        title: "Customers pay and go online",
-        desc: "Guests pick a plan, pay with mobile money or card, and RADIUS provisions access instantly.",
+        title: "Send setup details to our team",
+        desc: "From Captive portal, send your location, devices, and notes to our team. We wire up the guest sign-in page on your Omada Wi‑Fi so customers can pay and go online.",
+      },
+      {
+        num: "05",
+        title: "Go live & get paid",
+        desc: "Guests connect, pick a package, and pay with M‑Pesa or Airtel Money. Access turns on automatically — you track revenue and request withdrawals from your dashboard.",
       },
     ],
   },
@@ -249,8 +259,8 @@ const en: LandingCopy = {
         tag: "Branding",
       },
       {
-        title: "Snippe payments",
-        desc: "M-Pesa, Airtel Money, cards, and QR — webhooks mark sessions paid without manual checks.",
+        title: "Mobile money & cards",
+        desc: "M‑Pesa, Airtel Money, cards, and QR — payments confirm automatically so you rarely chase receipts.",
         tag: "Payments",
       },
       {
@@ -265,7 +275,7 @@ const en: LandingCopy = {
       },
       {
         title: "Automatic expiry",
-        desc: "Credentials and RADIUS sessions end on schedule — no spreadsheets or midnight logouts.",
+        desc: "When a package expires, guest access ends on schedule — no spreadsheets or midnight logouts.",
         tag: "Auto",
       },
       {
@@ -286,6 +296,11 @@ const en: LandingCopy = {
     titleGrad: "scale with you",
     sub: "Start free, upgrade when you grow. No surprise platform fees on the Starter tier.",
     mostPopular: "Most popular",
+    ctaFree: "Start free",
+    ctaPaid: "Get started",
+    loadingPlans: "Loading plans…",
+    plansLoadError: "Could not load plans. Please refresh the page.",
+    trialDays: "{days}-day free trial",
     plans: [
       {
         name: "Starter",
@@ -295,7 +310,7 @@ const en: LandingCopy = {
           "1 site",
           "3 access points",
           "Basic captive portal",
-          "Snippe payments",
+          "Mobile-money payments",
           "Email support",
           "1 reseller seat",
         ],
@@ -308,7 +323,7 @@ const en: LandingCopy = {
           "5 sites",
           "Unlimited APs",
           "Custom portal branding",
-          "Snippe payments + payouts",
+          "Payments & withdrawals",
           "Priority support",
           "5 reseller seats",
           "Analytics dashboard",
@@ -323,7 +338,7 @@ const en: LandingCopy = {
           "Unlimited sites",
           "Unlimited APs",
           "Full portal white-label",
-          "Snippe + bank disbursements",
+          "Payments & bank payouts",
           "24/7 phone support",
           "Unlimited reseller seats",
           "Advanced analytics",
@@ -369,7 +384,7 @@ const en: LandingCopy = {
     portalTitle: "FastNet WiFi",
     portalWelcome: "Welcome! Pick a plan and pay with M-Pesa or Airtel Money.",
     payNote: "Checkout via M-Pesa / Airtel Money",
-    footnote: "Illustrative captive portal — yours will use your brand, packages, and Snippe keys.",
+    footnote: "Illustrative captive portal — yours will show your brand, your packages, and your payment options.",
     packages: [
       { name: "1 hour basic", price: "TZS 500" },
       { name: "Daily unlimited", price: "TZS 2,000", featured: true },
@@ -384,15 +399,15 @@ const en: LandingCopy = {
     items: [
       {
         q: "Does SSDomada work with every Omada EAP?",
-        a: "Yes. Connect Omada SDN Controller (v5+) and we sync sites, SSIDs, and clients. Popular models include EAP653, EAP670, EAP773, and the outdoor line.",
+        a: "Yes. Connect your Omada controller and we sync your locations, guest Wi‑Fi names, and connected devices. Popular access points include EAP653, EAP670, EAP773, and outdoor models.",
       },
       {
         q: "What do I need to launch?",
-        a: "An Omada SDN Controller (appliance, software, or cloud), compatible TP-Link APs, and a Snippe merchant account for collections. Our docs walk through each step.",
+        a: "An Omada controller, compatible TP‑Link access points, and a guest Wi‑Fi network you want to monetize. Choose a plan in SSDomada, add your sites and devices, then send us a setup request — we help you go live.",
       },
       {
         q: "How fast do payouts hit my wallet?",
-        a: "Snippe mobile-money collections typically confirm in seconds. Withdrawals are processed on a business schedule and tracked inside SSDomada.",
+        a: "Guest payments by mobile money usually confirm in seconds. Your earnings appear in the dashboard; withdrawals are processed on a business schedule and tracked step by step.",
       },
       {
         q: "Can I fully brand the captive portal?",
@@ -400,7 +415,7 @@ const en: LandingCopy = {
       },
       {
         q: "Will the platform scale with heavy usage?",
-        a: "The stack is built on PostgreSQL, FreeRADIUS, and Redis-backed caching so you can serve thousands of concurrent sessions.",
+        a: "Yes. SSDomada is built for busy venues — many guests online at once across multiple locations, with monitoring and exports when you need them.",
       },
       {
         q: "Can I export usage and billing data?",
@@ -416,7 +431,7 @@ const en: LandingCopy = {
     secondary: "Contact sales",
   },
   footer: {
-    blurb: "Omada WiFi billing — captive portal, Snippe payments, FreeRADIUS, and reseller tooling in one platform.",
+    blurb: "Paid guest Wi‑Fi for Omada hotspots — captive portal, payments, multi‑site tools, and a reseller dashboard in one place.",
     product: "Product",
     company: "Company",
     contact: "Contact",
@@ -455,9 +470,9 @@ const sw: LandingCopy = {
     getStarted: "Anza",
   },
   hero: {
-    poweredBy: "Imetengenezwa kwa TP-Link Omada + Malipo ya Snippe",
+    poweredBy: "Imeundwa kwa hotspot za Omada",
     h1: ["Uza WiFi", "Kwa Urahisi,", "Mapato Zaidi"],
-    sub: "Malipo ya WiFi kupitia Omada — captive portal, Snippe, na udhibiti wa access point zako mahali pamoja.",
+    sub: "Captive portal yenye chapa yako, malipo ya simu, na udhibiti wa access point zako — kila kitu cha WiFi ya kulipia kwa wageni kutoka dashibodi moja.",
     subHighlight: "Anza kupata mapato leo kutoka hotspot yako.",
     ctaPrimary: "Anza bure",
     ctaSecondary: "Tazama demo",
@@ -504,11 +519,11 @@ const sw: LandingCopy = {
       },
       {
         title: "Mapato kila siku",
-        desc: "Snippe inalipa moja kwa moja kwenye wallet — daima unajua umepata kiasi gani.",
+        desc: "Ona mauzo yanapofanyika kwenye dashibodi — bila kubahatisha umepata kiasi gani leo.",
       },
       {
         title: "Udhibiti wa Omada",
-        desc: "Unganisha Omada SDN Controller na usimamie AP na maeneo kutoka dashibodi moja.",
+        desc: "Unganisha controller yako ya Omada na simamie maeneo, access point, na hali ya mtandao kutoka dashibodi moja.",
       },
       {
         title: "Captive portal ya chapa",
@@ -520,35 +535,40 @@ const sw: LandingCopy = {
       },
       {
         title: "Usalama thabiti",
-        desc: "FreeRADIUS, HTTPS, na mipangilio salama kwa data ya wateja.",
+        desc: "Muunganisho salama na muda wa mwisho wa kiotomatiki ili ufikiaji wa wageni uwe thabiti na salama.",
       },
     ],
   },
   howItWorks: {
     badge: "Jinsi inavyofanya",
-    title: "Hatua 4 hadi",
+    title: "Hatua 5 hadi",
     titleGrad: "WiFi ya kulipia",
-    sub: "Kutoka usajili hadi malipo ya kwanza katika siku moja.",
+    sub: "Safari kamili ya reseller — kutoka usajili na chaguo la plan hadi usanidi wa Omada na malipo ya kwanza ya mteja.",
     steps: [
       {
         num: "01",
-        title: "Jisajili kama reseller",
-        desc: "Fungua akaunti bure, jaza taarifa za biashara, na uanze kusanidi.",
+        title: "Jisajili & chagua plan",
+        desc: "Fungua akaunti ya reseller (jina, barua pepe, nenosiri, kampuni na brand), kisha chagua Starter, Pro au Enterprise — jaribio bure au lipa mtandaoni kwenye ukurasa wa plan.",
       },
       {
         num: "02",
-        title: "Unganisha Omada yako",
-        desc: "Unganisha Omada SDN Controller — AP na maeneo yanaonekana moja kwa moja.",
+        title: "Unganisha mtandao wa Omada",
+        desc: "Ongeza maeneo (sites), adopt access points kwenye controller yako, na sanidi SSID ya wageni kwenye dashibodi.",
       },
       {
         num: "03",
-        title: "Weka vifurushi vyako",
-        desc: "Saa, siku, wiki, mwezi — bei, kasi, kikomo cha data, na vifaa.",
+        title: "Vifurushi & captive portal",
+        desc: "Tengeneza vifurushi vya WiFi kwa wageni na weka chapa kwenye portal yako — nembo, rangi, ujumbe wa kukaribisha, na URL ya portal.",
       },
       {
         num: "04",
-        title: "Wateja walipa na kuunganishwa",
-        desc: "Mgeni achague kifurushi, alipe kwa simu au kadi, na RADIUS ipe idhini papo hapo.",
+        title: "Tuma maelezo kwa timu yetu",
+        desc: "Kwenye Captive portal, tuma eneo, vifaa, na maelezo kwa timu yetu. Tunasanidi ukurasa wa kuingia kwa wageni kwenye WiFi yako ya Omada ili waweze kulipa na kuunganishwa.",
+      },
+      {
+        num: "05",
+        title: "Anza kupata mapato",
+        desc: "Wageni huunganishwa, huchagua kifurushi, na kulipa kwa M-Pesa au Airtel Money. Mtandao unawashwa kiotomatiki — unafuatilia mapato na kuomba malipo ya nje kwenye dashibodi.",
       },
     ],
   },
@@ -569,8 +589,8 @@ const sw: LandingCopy = {
         tag: "Branding",
       },
       {
-        title: "Malipo ya Snippe",
-        desc: "M-Pesa, Airtel Money, kadi, QR — webhook zinakamilisha malipo.",
+        title: "Malipo ya simu & kadi",
+        desc: "M-Pesa, Airtel Money, kadi, QR — malipo yanathibitishwa kiotomatiki bila kufuatilia risiti kwa mkono.",
         tag: "Payments",
       },
       {
@@ -585,7 +605,7 @@ const sw: LandingCopy = {
       },
       {
         title: "Mwisho wa muda kiotomatiki",
-        desc: "Credential na session za RADIUS zinaisha kwa ratiba — bila hesabu za mkono.",
+        desc: "Kifurushi kinapomalizika, ufikiaji wa mgeni unaisha kwa ratiba — bila hesabu za mkono.",
         tag: "Auto",
       },
       {
@@ -606,6 +626,11 @@ const sw: LandingCopy = {
     titleGrad: "unapokua",
     sub: "Anza bure, boresha unapohitaji. Hakuna ada za kujificha kwenye Starter.",
     mostPopular: "Maarufu zaidi",
+    ctaFree: "Anza bure",
+    ctaPaid: "Anza sasa",
+    loadingPlans: "Inapakia mipango…",
+    plansLoadError: "Mipango haijapakiwa. Onyesha upya ukurasa.",
+    trialDays: "Jaribio la bure siku {days}",
     plans: [
       {
         name: "Starter",
@@ -615,7 +640,7 @@ const sw: LandingCopy = {
           "Eneo 1",
           "Access point 3",
           "Captive portal ya msingi",
-          "Malipo ya Snippe",
+          "Malipo ya simu",
           "Msaada wa barua pepe",
           "Kiti 1 cha reseller",
         ],
@@ -643,7 +668,7 @@ const sw: LandingCopy = {
           "Maeneo bila kikomo",
           "AP bila kikomo",
           "Portal nyeupe kabisa",
-          "Snippe + benki",
+          "Malipo & benki",
           "Simu 24/7",
           "Vitio bila kikomo",
           "Takwimu za hali ya juu",
@@ -689,7 +714,7 @@ const sw: LandingCopy = {
     portalTitle: "FastNet WiFi",
     portalWelcome: "Karibu! Chagua kifurushi na ulipe kwa M-Pesa au Airtel Money.",
     payNote: "Malipo kwa M-Pesa / Airtel Money",
-    footnote: "Mfano wa captive portal — wako utatumia chapa yako, vifurushi, na funguo za Snippe.",
+    footnote: "Mfano wa captive portal — wako utaonyesha chapa yako, vifurushi vyako, na njia zako za malipo.",
     packages: [
       { name: "Saa 1 — msingi", price: "TZS 500" },
       { name: "Siku — bila kikomo", price: "TZS 2,000", featured: true },
@@ -704,11 +729,11 @@ const sw: LandingCopy = {
     items: [
       {
         q: "SSDomada inafanya kazi na Omada EAP yoyote?",
-        a: "Ndiyo. Unganisha Omada SDN Controller (v5+) na tunasawazisha maeneo na wateja. EAP653, EAP670, EAP773, na nje.",
+        a: "Ndiyo. Unganisha controller yako ya Omada na tunasawazisha maeneo, majina ya WiFi ya wageni, na vifaa vilivyounganishwa. EAP653, EAP670, EAP773, na modeli za nje.",
       },
       {
         q: "Ninahitaji nini kuanza?",
-        a: "Omada SDN Controller, access point za TP-Link, na akaunti ya Snippe. Tuna mwongozo kamili.",
+        a: "Controller ya Omada, access point za TP-Link, na mtandao wa WiFi wa wageni unaotaka kulipisha. Chagua plan kwenye SSDomada, ongeza maeneo na vifaa, kisha tutusaidie kuanza.",
       },
       {
         q: "Malipo yanachukua muda gani?",
@@ -720,7 +745,7 @@ const sw: LandingCopy = {
       },
       {
         q: "Je, mfumo unastahimili mzigo mkubwa?",
-        a: "Ndiyo. PostgreSQL, FreeRADIUS, na Redis kwa maelfu ya session kwa wakati mmoja.",
+        a: "Ndiyo. Imeundwa kwa maeneo yenye wageni wengi — wageni wengi mtandaoni kwa wakati mmoja katika maeneo mengi, na takwimu unazohitaji.",
       },
       {
         q: "Ninaweza kutoa data?",
@@ -736,7 +761,7 @@ const sw: LandingCopy = {
     secondary: "Wasiliana nasi",
   },
   footer: {
-    blurb: "Malipo ya WiFi ya Omada — captive portal, Snippe, FreeRADIUS, na zana za reseller.",
+    blurb: "WiFi ya kulipia kwa wageni kwenye Omada — captive portal, malipo, zana za maeneo mengi, na dashibodi ya reseller.",
     product: "Bidhaa",
     company: "Kampuni",
     contact: "Mawasiliano",

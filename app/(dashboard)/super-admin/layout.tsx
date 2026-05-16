@@ -24,6 +24,7 @@ import {
   Menu,
   X,
   Layers,
+  Globe,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useState } from "react";
 import { fetchSession, redirectAfterAuth, setStoredToken } from "@/lib/auth-client";
@@ -31,7 +32,13 @@ import { fetchSession, redirectAfterAuth, setStoredToken } from "@/lib/auth-clie
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
 const sections: { title: string; items: NavItem[] }[] = [
-  { title: "Control", items: [{ href: "/super-admin/dashboard", label: "Dashboard", icon: LayoutDashboard }] },
+  {
+    title: "Control",
+    items: [
+      { href: "/super-admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/super-admin/landing-page", label: "Landing page", icon: Globe },
+    ],
+  },
   {
     title: "Business",
     items: [

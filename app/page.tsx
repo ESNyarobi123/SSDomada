@@ -36,6 +36,9 @@ import {
   Wallet,
   Eye,
   FileText,
+  Loader2,
+  Router,
+  Send,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import {
@@ -43,7 +46,19 @@ import {
   LandingLanguageSwitch,
   useLandingLocale,
 } from "@/components/landing-locale";
+import { useLandingPageConfig } from "@/components/landing/LandingPageSettingsProvider";
+import {
+  enabledFooterLinks,
+  enabledSocialLinks,
+  pickLocalized,
+  SOCIAL_PLATFORM_LABELS,
+} from "@/lib/landing-page-settings";
 import { OmadaHardwareCarousel } from "@/components/landing/OmadaHardwareCarousel";
+import {
+  formatPlatformPlanPrice,
+  platformPlanFeatureRows,
+  type PublicResellerPlan,
+} from "@/lib/reseller-plan-features";
 
 // ============================================================
 // SCROLL ANIMATION HOOK
@@ -89,7 +104,10 @@ function AnimatedCounter({ target, suffix = "" }: { target: number; suffix?: str
 // NAVBAR
 // ============================================================
 function Navbar() {
-  const { t } = useLandingLocale();
+  const { t: tBase } = useLandingLocale();
+  const { t, config } = useLandingPageConfig();
+  const brandName = config?.brand.name ?? "SSDomada";
+  const brandLogo = config?.brand.logoUrl || "/images/SSDomada.png";
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -107,26 +125,37 @@ function Navbar() {
     <nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
         scrolled
-          ? "bg-onyx-950/90 backdrop-blur-2xl border-b border-gold-10/80 shadow-lg shadow-black/40"
-          : "bg-gradient-to-b from-onyx-950/80 to-transparent backdrop-blur-sm"
+          ? "bg-onyx-950/95 backdrop-blur-2xl shadow-lg shadow-black/40"
+          : "bg-onyx-950/50 backdrop-blur-sm"
       }`}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 md:py-4 flex items-center justify-between gap-3">
         <Link href="/" className="flex items-center gap-3 md:gap-3.5 group shrink-0 min-w-0">
           <div className="relative shrink-0">
-            <Image
-              src="/images/SSDomada.png"
-              alt="SSDomada"
-              width={64}
-              height={64}
-              className="rounded-2xl w-12 h-12 md:w-14 md:h-14 transition-transform group-hover:scale-105 ring-1 ring-white/10"
-            />
+            {brandLogo.startsWith("http") ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={brandLogo}
+                alt={brandName}
+                width={64}
+                height={64}
+                className="rounded-2xl w-12 h-12 md:w-14 md:h-14 object-cover transition-transform group-hover:scale-105 ring-1 ring-white/10"
+              />
+            ) : (
+              <Image
+                src={brandLogo}
+                alt={brandName}
+                width={64}
+                height={64}
+                className="rounded-2xl w-12 h-12 md:w-14 md:h-14 transition-transform group-hover:scale-105 ring-1 ring-white/10"
+              />
+            )}
             <div className="absolute inset-0 rounded-2xl bg-gold-20 opacity-0 group-hover:opacity-100 transition-opacity blur-md scale-110 pointer-events-none" />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="text-xl md:text-2xl font-extrabold text-gradient tracking-tight leading-tight truncate">SSDomada</span>
+            <span className="text-xl md:text-2xl font-extrabold text-gradient tracking-tight leading-tight truncate">{brandName}</span>
             <span className="text-[10px] md:text-[11px] font-semibold uppercase tracking-widest text-onyx-500 hidden sm:block">
-              {t.nav.tagline}
+              {tBase.nav.tagline}
             </span>
           </div>
         </Link>
@@ -208,7 +237,7 @@ function Navbar() {
 // HERO SECTION
 // ============================================================
 function HeroSection() {
-  const { t } = useLandingLocale();
+  const { t } = useLandingPageConfig();
   const [live, setLive] = useState<{
     activeResellers: number;
     liveWifiPackages: number;
@@ -433,8 +462,11 @@ function BenefitsSection() {
 function HowItWorksSection() {
   const { t } = useLandingLocale();
   const { ref, isVisible } = useInView();
-  const icons = [Users, Radio, Settings, CreditCard];
-  const steps = t.howItWorks.steps.map((s, i) => ({ ...s, icon: icons[i] }));
+  const stepIcons = [Users, CreditCard, Router, Globe, Send, Wallet];
+  const steps = t.howItWorks.steps.map((s, i) => ({
+    ...s,
+    icon: stepIcons[i] ?? Users,
+  }));
 
   return (
     <section id="how-it-works" className="py-32 relative scroll-mt-24 md:scroll-mt-28" ref={ref}>
@@ -523,19 +555,58 @@ function FeaturesSection() {
 }
 
 // ============================================================
-// PRICING
+// PRICING — live plans from GET /api/v1/plans (same source as /pricing)
 // ============================================================
+function planIntervalSuffix(interval: string) {
+  if (interval === "MONTHLY") return "/mo";
+  if (interval === "YEARLY") return "/yr";
+  return "";
+}
+
+function planCardIcon(p: PublicResellerPlan) {
+  if (p.price <= 0) return Zap;
+  if (p.isFeatured) return BadgeCheck;
+  return Lock;
+}
+
 function PricingSection() {
   const { t } = useLandingLocale();
   const { ref, isVisible } = useInView();
-  const icons = [Zap, BadgeCheck, Lock];
-  const plans = t.pricing.plans.map((p, i) => ({
-    ...p,
-    price: ["0", "49,000", "149,000"][i],
-    period: "/mo",
-    featured: i === 1,
-    icon: icons[i],
-  }));
+  const [plans, setPlans] = useState<PublicResellerPlan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/v1/plans")
+      .then((r) => r.json())
+      .then((j: { success?: boolean; data?: PublicResellerPlan[] }) => {
+        if (cancelled) return;
+        if (j?.success && Array.isArray(j.data)) {
+          setPlans(j.data);
+          setLoadError(false);
+        } else {
+          setLoadError(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ctaFor = (p: PublicResellerPlan) => (p.price <= 0 ? t.pricing.ctaFree : t.pricing.ctaPaid);
+  const gridCols =
+    plans.length <= 1
+      ? "md:grid-cols-1 max-w-md"
+      : plans.length === 2
+        ? "md:grid-cols-2 max-w-4xl"
+        : "md:grid-cols-3 max-w-6xl";
 
   return (
     <section id="pricing" className="py-32 relative scroll-mt-24 md:scroll-mt-28" ref={ref}>
@@ -552,49 +623,74 @@ function PricingSection() {
           <p className="text-onyx-300 max-w-xl mx-auto text-lg">{t.pricing.sub}</p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6 max-w-6xl mx-auto items-start perspective-1000">
-          {plans.map((p, i) => (
-            <div key={p.name} className={`relative rounded-3xl tilt-card transition-all duration-700 ${isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"} ${
-              p.featured
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-4">
+            <Loader2 className="w-10 h-10 text-gold animate-spin" />
+            <p className="text-onyx-400 text-sm">{t.pricing.loadingPlans}</p>
+          </div>
+        ) : loadError || plans.length === 0 ? (
+          <p className="text-center text-onyx-400 py-12">{t.pricing.plansLoadError}</p>
+        ) : (
+          <div className={`grid gap-6 mx-auto items-start perspective-1000 ${gridCols}`}>
+            {plans.map((p, i) => {
+              const Icon = planCardIcon(p);
+              const featured = Boolean(p.isFeatured);
+              const priceLabel = formatPlatformPlanPrice(p.price);
+              const period = p.price > 0 ? planIntervalSuffix(p.interval) : "";
+              const features = platformPlanFeatureRows(p).filter((f) => f.ok);
+
+              return (
+            <div key={p.id} className={`relative rounded-3xl tilt-card transition-all duration-700 ${isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"} ${
+              featured
                 ? "glass-3d border-2 border-gold-50 shadow-2xl shadow-gold-10 md:scale-110 md:z-10"
                 : "glass-3d border border-white/[0.08]"
             }`} style={{ transitionDelay: `${i * 150}ms` }}>
-              {p.featured && (
+              {featured && (
                 <div className="absolute -top-5 left-1/2 -translate-x-1/2 px-6 py-2 bg-gold text-onyx-950 text-xs font-black rounded-full shadow-lg shadow-gold-20 uppercase tracking-wider">
                   {t.pricing.mostPopular}
                 </div>
               )}
               <div className="p-8">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${p.featured ? "bg-gold-20" : "bg-gold-10"}`}>
-                    <p.icon className="w-5 h-5 text-gold" />
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${featured ? "bg-gold-20" : "bg-gold-10"}`}>
+                    <Icon className="w-5 h-5 text-gold" />
                   </div>
                   <h3 className="text-2xl font-black">{p.name}</h3>
                 </div>
-                <p className="text-onyx-400 text-sm mb-6">{p.desc}</p>
-                <div className="mb-8">
-                  <span className="text-5xl font-black text-gradient">TZS {p.price}</span>
-                  <span className="text-onyx-400 text-sm ml-1">{p.period}</span>
+                {p.description && <p className="text-onyx-400 text-sm mb-6">{p.description}</p>}
+                <div className={p.trialDays > 0 ? "mb-2" : "mb-8"}>
+                  <span className="text-5xl font-black text-gradient">{priceLabel}</span>
+                  {period && <span className="text-onyx-400 text-sm ml-1">{period}</span>}
                 </div>
+                {p.trialDays > 0 && (
+                  <p className="text-xs text-emerald-400 font-semibold mb-6">
+                    {t.pricing.trialDays.replace("{days}", String(p.trialDays))}
+                  </p>
+                )}
                 <ul className="space-y-3.5 mb-10">
-                  {p.features.map((f) => (
-                    <li key={f} className="flex items-center gap-3 text-sm text-onyx-200">
+                  {features.map((f) => (
+                    <li key={f.label} className="flex items-center gap-3 text-sm text-onyx-200">
                       <CheckCircle2 className="w-4.5 h-4.5 text-gold flex-shrink-0" />
-                      {f}
+                      {f.label}
                     </li>
                   ))}
                 </ul>
-                <a href="#" className={`block text-center py-4 rounded-2xl font-bold text-base transition-all hover:scale-[1.02] active:scale-95 ${
-                  p.featured
-                    ? "bg-gold hover:bg-gold-400 text-onyx-950 hover:shadow-lg hover:shadow-gold-20"
-                    : "border-2 border-gold-30 text-gold hover:bg-gold-10 hover:border-gold-50"
-                }`}>
-                  {p.cta}
-                </a>
+                <Link
+                  href={`/register?plan=${encodeURIComponent(p.slug)}`}
+                  className={`block text-center py-4 rounded-2xl font-bold text-base transition-all hover:scale-[1.02] active:scale-95 ${
+                    featured
+                      ? "bg-gold hover:bg-gold-400 text-onyx-950 hover:shadow-lg hover:shadow-gold-20"
+                      : "border-2 border-gold-30 text-gold hover:bg-gold-10 hover:border-gold-50"
+                  }`}
+                >
+                  {ctaFor(p)}
+                </Link>
               </div>
             </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -771,7 +867,10 @@ function FAQSection() {
 // CTA SECTION
 // ============================================================
 function CTASection() {
-  const { t } = useLandingLocale();
+  const { t, config } = useLandingPageConfig();
+  const contactEmail = config?.cta.contactEmail ?? "support@ssdomada.com";
+  const brandLogo = config?.brand.logoUrl || "/images/SSDomada.png";
+  const brandName = config?.brand.name ?? "SSDomada";
   return (
     <section className="py-32 relative overflow-hidden">
       <div className="absolute inset-0 bg-onyx-950" />
@@ -779,7 +878,12 @@ function CTASection() {
       <div className="relative z-10 max-w-4xl mx-auto px-6 text-center">
         <div className="relative inline-block mb-8">
           <div className="absolute inset-0 rounded-2xl bg-gold-20 blur-3xl scale-200 animate-glow" />
-          <Image src="/images/SSDomada.png" alt="SSDomada" width={90} height={90} className="relative rounded-2xl" />
+          {brandLogo.startsWith("http") ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={brandLogo} alt={brandName} width={90} height={90} className="relative rounded-2xl object-cover" />
+          ) : (
+            <Image src={brandLogo} alt={brandName} width={90} height={90} className="relative rounded-2xl" />
+          )}
         </div>
         <h2 className="text-4xl md:text-6xl font-black mb-6 leading-tight">
           {t.cta.title} <span className="text-gradient">{t.cta.titleLine2}</span>
@@ -792,7 +896,7 @@ function CTASection() {
             <span>{t.cta.primary}</span>
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
           </a>
-          <a href="mailto:support@ssdomada.com" className="px-10 py-5 border-2 border-gold-30 text-gold hover:bg-gold-10 hover:border-gold-50 font-semibold rounded-2xl text-lg transition-all flex items-center gap-3">
+          <a href={`mailto:${contactEmail}`} className="px-10 py-5 border-2 border-gold-30 text-gold hover:bg-gold-10 hover:border-gold-50 font-semibold rounded-2xl text-lg transition-all flex items-center gap-3">
             <Mail className="w-5 h-5" />
             <span>{t.cta.secondary}</span>
           </a>
@@ -806,7 +910,19 @@ function CTASection() {
 // FOOTER
 // ============================================================
 function Footer() {
-  const { t } = useLandingLocale();
+  const { locale } = useLandingLocale();
+  const { t, config } = useLandingPageConfig();
+  const brandName = config?.brand.name ?? "SSDomada";
+  const brandLogo = config?.brand.logoUrl || "/images/SSDomada.png";
+  const contact = config?.footer.contact;
+  const social = config ? enabledSocialLinks(config.footer.social) : [];
+  const companyLinks = config ? enabledFooterLinks(config.footer.companyLinks, locale) : [];
+  const legalLinks = config ? enabledFooterLinks(config.footer.legalLinks, locale) : [];
+  const year = config?.footer.copyrightYear ?? new Date().getFullYear();
+  const rights =
+    config?.footer.rightsText
+      ? pickLocalized(config.footer.rightsText, locale)
+      : "All rights reserved.";
   return (
     <footer className="border-t border-gold-10 bg-onyx-950 pt-20 pb-10">
       <div className="max-w-7xl mx-auto px-6">
@@ -814,17 +930,33 @@ function Footer() {
           {/* Brand */}
           <div className="lg:col-span-1">
             <div className="flex items-center gap-3 mb-5">
-              <Image src="/images/SSDomada.png" alt="SSDomada" width={40} height={40} className="rounded-xl" />
-              <span className="text-xl font-extrabold text-gradient">SSDomada</span>
+              {brandLogo.startsWith("http") ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={brandLogo} alt={brandName} width={40} height={40} className="rounded-xl object-cover" />
+              ) : (
+                <Image src={brandLogo} alt={brandName} width={40} height={40} className="rounded-xl" />
+              )}
+              <span className="text-xl font-extrabold text-gradient">{brandName}</span>
             </div>
             <p className="text-onyx-400 text-sm leading-relaxed mb-6">
               {t.footer.blurb}
             </p>
-            <div className="flex gap-3">
-              {["X", "IG", "FB", "LI"].map((s) => (
-                <a key={s} href="#" className="w-9 h-9 rounded-lg bg-onyx-800 flex items-center justify-center text-onyx-400 hover:bg-gold-10 hover:text-gold transition-all text-xs font-bold">{s}</a>
-              ))}
-            </div>
+            {social.length > 0 && (
+              <div className="flex flex-wrap gap-3">
+                {social.map((s) => (
+                  <a
+                    key={s.id}
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={s.label}
+                    className="w-9 h-9 rounded-lg bg-onyx-800 flex items-center justify-center text-onyx-400 hover:bg-gold-10 hover:text-gold transition-all text-xs font-bold"
+                  >
+                    {s.label.trim() || SOCIAL_PLATFORM_LABELS[s.platform]}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Product */}
@@ -841,8 +973,12 @@ function Footer() {
           <div>
             <h4 className="text-sm font-bold text-gold mb-5 uppercase tracking-wider">{t.footer.company}</h4>
             <ul className="space-y-3 text-sm text-onyx-400">
-              {["About Us", "Blog", "Careers", "Partners"].map((l) => (
-                <li key={l}><a href="#" className="hover:text-gold transition-colors hover:pl-1">{l}</a></li>
+              {companyLinks.map((l) => (
+                <li key={l.href + l.label}>
+                  <a href={l.href} className="hover:text-gold transition-colors hover:pl-1">
+                    {l.label}
+                  </a>
+                </li>
               ))}
             </ul>
           </div>
@@ -851,21 +987,49 @@ function Footer() {
           <div>
             <h4 className="text-sm font-bold text-gold mb-5 uppercase tracking-wider">{t.footer.contact}</h4>
             <ul className="space-y-4 text-sm text-onyx-400">
-              <li className="flex items-center gap-3"><Mail className="w-4 h-4 text-gold-60-op" /> support@ssdomada.com</li>
-              <li className="flex items-center gap-3"><Phone className="w-4 h-4 text-gold-60-op" /> +255 700 000 000</li>
-              <li className="flex items-center gap-3"><MapPin className="w-4 h-4 text-gold-60-op" /> Dar es Salaam, Tanzania</li>
-              <li className="flex items-center gap-3"><Headphones className="w-4 h-4 text-gold-60-op" /> 24/7 Support</li>
+              {contact?.email && (
+                <li className="flex items-center gap-3">
+                  <Mail className="w-4 h-4 text-gold-60-op shrink-0" />
+                  <a href={`mailto:${contact.email}`} className="hover:text-gold transition-colors">
+                    {contact.email}
+                  </a>
+                </li>
+              )}
+              {contact?.phone && (
+                <li className="flex items-center gap-3">
+                  <Phone className="w-4 h-4 text-gold-60-op shrink-0" />
+                  <a href={`tel:${contact.phone.replace(/\s/g, "")}`} className="hover:text-gold transition-colors">
+                    {contact.phone}
+                  </a>
+                </li>
+              )}
+              {contact?.location && (
+                <li className="flex items-center gap-3">
+                  <MapPin className="w-4 h-4 text-gold-60-op shrink-0" />
+                  {pickLocalized(contact.location, locale)}
+                </li>
+              )}
+              {contact?.supportNote && (
+                <li className="flex items-center gap-3">
+                  <Headphones className="w-4 h-4 text-gold-60-op shrink-0" />
+                  {pickLocalized(contact.supportNote, locale)}
+                </li>
+              )}
             </ul>
           </div>
         </div>
 
         {/* Bottom bar */}
         <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-onyx-500">&copy; 2026 SSDomada. All rights reserved.</p>
-          <div className="flex items-center gap-8 text-xs text-onyx-500">
-            <a href="#" className="hover:text-gold transition-colors">Privacy Policy</a>
-            <a href="#" className="hover:text-gold transition-colors">Terms of Service</a>
-            <a href="#" className="hover:text-gold transition-colors">Cookie Policy</a>
+          <p className="text-xs text-onyx-500">
+            &copy; {year} {brandName}. {rights}
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-6 text-xs text-onyx-500">
+            {legalLinks.map((l) => (
+              <a key={l.href + l.label} href={l.href} className="hover:text-gold transition-colors">
+                {l.label}
+              </a>
+            ))}
           </div>
         </div>
       </div>

@@ -8,13 +8,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { landingCopy, type Locale } from "@/lib/landing-i18n";
+import { landingCopy, type LandingCopy, type Locale } from "@/lib/landing-i18n";
+import { LandingPageSettingsProvider } from "@/components/landing/LandingPageSettingsProvider";
 
 type LandingContextValue = {
   locale: Locale;
   setLocale: (l: Locale) => void;
   toggleLocale: () => void;
-  t: ReturnType<typeof landingCopy>;
+  /** Base i18n only — prefer `useLandingPageConfig().t` inside the landing page for CMS merges. */
+  t: LandingCopy;
 };
 
 const LandingLocaleContext = createContext<LandingContextValue | null>(null);
@@ -33,7 +35,7 @@ export function LandingLocaleProvider({ children }: { children: ReactNode }) {
 
   return (
     <LandingLocaleContext.Provider value={value}>
-      {children}
+      <LandingPageSettingsProvider>{children}</LandingPageSettingsProvider>
     </LandingLocaleContext.Provider>
   );
 }

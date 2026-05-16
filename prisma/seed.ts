@@ -1,6 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { RESELLER_PLAN_PAYWALL_SETTING_KEY } from "../lib/platform-settings";
+import {
+  LANDING_PAGE_SETTING_KEY,
+  defaultLandingPageConfig,
+} from "../lib/landing-page-settings";
 
 const prisma = new PrismaClient();
 
@@ -198,6 +202,11 @@ async function main() {
     { key: "support_phone", value: "+255700000000" },
     // Super-admin can set to false on /super-admin/settings to allow sites/devices without plan (QA only).
     { key: RESELLER_PLAN_PAYWALL_SETTING_KEY, value: "true", type: "boolean" },
+    {
+      key: LANDING_PAGE_SETTING_KEY,
+      value: JSON.stringify(defaultLandingPageConfig()),
+      type: "json" as const,
+    },
   ];
 
   for (const s of settings) {
