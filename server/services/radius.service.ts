@@ -580,8 +580,12 @@ export class RadiusService {
       console.log(`[RADIUS] UNAUTHORIZED ${label} mac=${clientMac} site=${omadaSiteId} via ${unauth.path}`);
     } else {
       const detail = unauth.msg ?? `errorCode=${unauth.errorCode}`;
-      errors.push(`Omada unauthorize failed ${label} site=${omadaSiteId}: ${detail}`);
-      console.warn(`[RADIUS] Omada unauthorize failed ${label} mac=${clientMac}: ${detail}`);
+      errors.push(`Omada UNAUTHORIZE failed ${label} site=${omadaSiteId}: ${detail}`);
+      // Use "UNAUTHORIZE-FAILED" so it matches the same greps people use for
+      // success traces ("UNAUTHORIZE" / "UNAUTHORIZED").
+      console.warn(
+        `[RADIUS] UNAUTHORIZE-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${unauth.errorCode ?? "?"} msg=${detail}`,
+      );
     }
 
     // 2. External Portal v2 deauth — only works if we have the original
@@ -623,12 +627,16 @@ export class RadiusService {
       console.log(
         `[RADIUS] RECONNECTED ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path}`,
       );
-      return { kicked: true, errors };
+    } else {
+      console.warn(
+        `[RADIUS] RECONNECT-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${reconnect.errorCode ?? "?"} msg=${reconnect.msg ?? "?"}`,
+      );
     }
 
-    // Optional hard-block fallback (explicit admin block flows only).
+    // 4. Optional hard-block (explicit admin block flows only).
+    let block: { ok: boolean; path: string; errorCode?: number; msg?: string } | null = null;
     if (hardBlock) {
-      const block = await OmadaService.blockClient(omadaSiteId, clientMac).catch((err: any) => ({
+      block = await OmadaService.blockClient(omadaSiteId, clientMac).catch((err: any) => ({
         ok: false as const,
         path: "(threw)" as const,
         errorCode: undefined,
@@ -636,22 +644,25 @@ export class RadiusService {
       }));
       if (block.ok) {
         console.log(`[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path}`);
-        return { kicked: true, errors };
+      } else {
+        console.warn(
+          `[RADIUS] BLOCK-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${block.errorCode ?? "?"} msg=${block.msg ?? "?"}`,
+        );
       }
-      const detail = `reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`} block=${block.msg ?? `errorCode=${block.errorCode}`}`;
-      errors.push(`Omada force-kick failed ${label} site=${omadaSiteId}: ${detail}`);
-      console.warn(`[RADIUS] Omada force-kick failed ${label} mac=${clientMac}: ${detail}`);
-      return { kicked: false, errors };
     }
 
-    // For expiry flow we still treat successful unauthorize as enough.
-    if (unauth.ok) {
-      return { kicked: true, errors };
-    }
+    // Always emit a single grep-friendly summary line so operators don't
+    // have to chase 3 different log fragments.
+    const kicked = unauth.ok || reconnect.ok || Boolean(block?.ok);
+    console.log(
+      `[RADIUS] KICK-RESULT ${label} mac=${clientMac} site=${omadaSiteId} kicked=${kicked} unauthorize=${unauth.ok ? "ok" : `fail(${unauth.errorCode ?? "?"})`} reconnect=${reconnect.ok ? "ok" : `fail(${reconnect.errorCode ?? "?"})`}${block ? ` block=${block.ok ? "ok" : `fail(${block.errorCode ?? "?"})`}` : ""}`,
+    );
 
-    const detail = `unauthorize=${unauth.msg ?? `errorCode=${unauth.errorCode}`} reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`}`;
+    if (kicked) return { kicked: true, errors };
+
+    const detail = `unauthorize=${unauth.msg ?? `errorCode=${unauth.errorCode}`} reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`}${block ? ` block=${block.msg ?? `errorCode=${block.errorCode}`}` : ""}`;
     errors.push(`Omada force-kick failed ${label} site=${omadaSiteId}: ${detail}`);
-    console.warn(`[RADIUS] Omada force-kick failed ${label} mac=${clientMac}: ${detail}`);
+    console.warn(`[RADIUS] KICK-FAILED ${label} mac=${clientMac} site=${omadaSiteId}: ${detail}`);
     return { kicked: false, errors };
   }
 

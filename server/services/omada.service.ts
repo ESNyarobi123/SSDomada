@@ -452,10 +452,12 @@ export class OmadaService {
     mac: string,
     action: "reconnect" | "block" | "unblock" | "unauthorize",
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
-    const candidates = [
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/${action}`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${mac}/${action}`,
-    ];
+    // `unauthorize` historically lives under `/cmd/`. The other client
+    // actions are on the canonical Open API path. Try the most likely path
+    // first to avoid noisy 404s in the logs.
+    const cmdPath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${mac}/${action}`;
+    const flatPath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/${action}`;
+    const candidates = action === "unauthorize" ? [cmdPath, flatPath] : [flatPath, cmdPath];
 
     let lastResult: { errorCode?: number; msg?: string } = {};
     for (const path of candidates) {
@@ -463,6 +465,11 @@ export class OmadaService {
         const res = (await OmadaClient.post<Record<string, unknown>>(path, {})) as Record<string, unknown>;
         const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
         const msg = typeof res.msg === "string" ? res.msg : undefined;
+        // Visibility: every call leaves a trace so operators can grep failures
+        // by mac/action without digging into individual handlers.
+        console.log(
+          `[Omada] ${action} mac=${mac} site=${omadaSiteId} path=${path} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
+        );
         if (ec === 0) {
           return { ok: true, path, errorCode: ec, msg };
         }
@@ -477,7 +484,9 @@ export class OmadaService {
           return { ok: false, path, errorCode: ec, msg };
         }
       } catch (err: any) {
-        lastResult = { msg: err?.message || String(err) };
+        const message = err?.message || String(err);
+        console.warn(`[Omada] ${action} threw mac=${mac} path=${path}: ${message}`);
+        lastResult = { msg: message };
       }
     }
     return { ok: false, path: candidates[candidates.length - 1], ...lastResult };
