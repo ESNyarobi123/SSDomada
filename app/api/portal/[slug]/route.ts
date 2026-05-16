@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { RadiusService } from "@/server/services/radius.service";
 import { PaymentService } from "@/server/services/payment.service";
+import { checkActiveResellerPlan } from "@/server/services/reseller-plan-access.service";
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
@@ -70,6 +71,15 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     if (!reseller.isActive) {
       return NextResponse.json({ error: "This portal is currently unavailable" }, { status: 503 });
     }
+
+    const planGate = await checkActiveResellerPlan(reseller.id);
+    if (!planGate.ok) {
+      return NextResponse.json(
+        { success: false, error: "This hotspot is temporarily unavailable. Please contact the operator.", code: planGate.code },
+        { status: planGate.statusCode },
+      );
+    }
+    const canUseCustomBranding = !planGate.enforced || Boolean(planGate.plan?.customBranding);
 
     // 2. Check if client already has active RADIUS access
     let isAuthorized = false;
@@ -196,21 +206,21 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       success: true,
       data: {
         portal: {
-          companyName: portalConfig?.companyName || reseller.companyName,
-          logo: portalConfig?.logo || reseller.logo,
-          bgImage: portalConfig?.bgImage,
-          bgColor: portalConfig?.bgColor,
-          primaryColor: portalConfig?.primaryColor,
-          accentColor: portalConfig?.accentColor,
-          welcomeText: portalConfig?.welcomeText,
+          companyName: canUseCustomBranding ? portalConfig?.companyName || reseller.companyName : reseller.companyName,
+          logo: canUseCustomBranding ? portalConfig?.logo || reseller.logo : null,
+          bgImage: canUseCustomBranding ? portalConfig?.bgImage : null,
+          bgColor: canUseCustomBranding ? portalConfig?.bgColor || "#0a0a0a" : "#0a0a0a",
+          primaryColor: canUseCustomBranding ? portalConfig?.primaryColor || "#ffd700" : "#ffd700",
+          accentColor: canUseCustomBranding ? portalConfig?.accentColor || "#00c853" : "#00c853",
+          welcomeText: canUseCustomBranding ? portalConfig?.welcomeText : "Welcome! Connect to WiFi",
           termsUrl: portalConfig?.termsUrl,
           termsText: portalConfig?.termsText,
-          template: portalConfig?.template || "default",
-          showLogo: portalConfig?.showLogo ?? true,
-          showSocial: portalConfig?.showSocial ?? false,
-          socialLinks: portalConfig?.socialLinks,
-          customCss: portalConfig?.customCss,
-          customHtml: portalConfig?.customHtml,
+          template: canUseCustomBranding ? portalConfig?.template || "default" : "default",
+          showLogo: canUseCustomBranding ? portalConfig?.showLogo ?? true : false,
+          showSocial: canUseCustomBranding ? portalConfig?.showSocial ?? false : false,
+          socialLinks: canUseCustomBranding ? portalConfig?.socialLinks : null,
+          customCss: canUseCustomBranding ? portalConfig?.customCss : null,
+          customHtml: canUseCustomBranding ? portalConfig?.customHtml : null,
         },
         packages,
         session: portalSession ? {

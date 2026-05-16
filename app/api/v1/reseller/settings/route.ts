@@ -3,6 +3,8 @@ import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { changePasswordSchema, updateNotificationSchema } from "@/lib/validations/reseller";
 import bcrypt from "bcryptjs";
+import { ResellerPlanService } from "@/server/services/reseller-plan.service";
+import { checkFeatureAccess, getPlanAccessSnapshot } from "@/server/services/reseller-plan-access.service";
 
 /**
  * GET /api/v1/reseller/settings
@@ -13,7 +15,7 @@ export async function GET(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
 
   try {
-    const [user, reseller, notifPrefs] = await Promise.all([
+    const [user, reseller, notifPrefs, platformPlan] = await Promise.all([
       prisma.user.findUnique({
         where: { id: ctx.userId },
         select: { email: true, phone: true, createdAt: true, emailVerified: true },
@@ -30,7 +32,9 @@ export async function GET(req: NextRequest) {
       prisma.notificationPreference.findUnique({
         where: { resellerId: ctx.resellerId },
       }),
+      ResellerPlanService.computeUsage(ctx.resellerId),
     ]);
+    const planAccess = await getPlanAccessSnapshot(ctx.resellerId);
 
     // Auto-create default notification preferences
     let prefs = notifPrefs;
@@ -60,9 +64,14 @@ export async function GET(req: NextRequest) {
         memberSince: user?.createdAt,
       },
       subscription: {
-        active: reseller?.isActive || false,
+        active: planAccess.access.ok,
+        accountActive: reseller?.isActive || false,
         commissionRate: reseller?.commissionRate,
         brandSlug: reseller?.brandSlug,
+      },
+      platformPlan: {
+        ...platformPlan,
+        features: planAccess.features,
       },
       notifications: prefs,
       security: {
@@ -117,6 +126,16 @@ export async function PUT(req: NextRequest) {
     // === NOTIFICATION PREFERENCES ===
     if (action === "notifications") {
       const validated = updateNotificationSchema.parse(body);
+      const wantsSms =
+        validated.smsOnPayment === true ||
+        validated.smsOnWithdrawal === true ||
+        validated.smsOnDeviceDown === true;
+      if (wantsSms) {
+        const featureGate = await checkFeatureAccess(ctx.resellerId, "smsNotifications");
+        if (!featureGate.ok) {
+          return apiError(featureGate.message, featureGate.statusCode, featureGate.code);
+        }
+      }
 
       const prefs = await prisma.notificationPreference.upsert({
         where: { resellerId: ctx.resellerId },

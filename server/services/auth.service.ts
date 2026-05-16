@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/server/lib/prisma";
 import { OmadaService } from "@/server/services/omada.service";
+import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 import type { UserRole } from "@prisma/client";
 
 const SESSION_DAYS = 30;
@@ -71,6 +72,7 @@ export class AuthService {
     role: UserRole;
     companyName?: string;
     brandSlug?: string;
+    planSlug?: string;
   }) {
     const email = data.email.toLowerCase().trim();
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -118,6 +120,10 @@ export class AuthService {
       // because Omada call can be slow / unreachable.
       void OmadaService.ensureResellerSite(reseller.id, company).catch((err) => {
         console.error("[AuthService] ensureResellerSite failed:", err);
+      });
+
+      await ResellerPlanService.assignInitialPlan(reseller.id, data.planSlug).catch((err) => {
+        console.error("[AuthService] assignInitialPlan failed:", err);
       });
 
       const full = await prisma.user.findUnique({

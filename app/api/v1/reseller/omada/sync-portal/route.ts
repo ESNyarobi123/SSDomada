@@ -5,6 +5,7 @@ import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } 
 import { OmadaService } from "@/server/services/omada.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 import { getResellerOmadaPortalName } from "@/server/lib/reseller-portal-display-name";
+import { ensureActiveResellerPlan } from "@/server/middleware/paywall";
 
 const bodySchema = z.object({
   siteId: z.string().cuid().optional(),
@@ -21,6 +22,9 @@ const bodySchema = z.object({
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
   if (ctx instanceof Response) return ctx;
+
+  const planGate = await ensureActiveResellerPlan(ctx.resellerId);
+  if (planGate) return planGate;
 
   try {
     const json = await req.json().catch(() => ({}));

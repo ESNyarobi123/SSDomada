@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/v1/plans
  * Public — list SSDomada pricing tiers for the marketing/pricing page.

@@ -3,6 +3,7 @@ import { prisma } from "@/server/lib/prisma";
 import { verifyAdmin, apiSuccess, apiError, logAdminAction, getClientIp } from "@/server/middleware/admin-auth";
 import { createResellerSchema, paginationSchema } from "@/lib/validations/admin";
 import { OmadaService } from "@/server/services/omada.service";
+import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 import bcrypt from "bcryptjs";
 
 /**
@@ -164,6 +165,9 @@ export async function POST(req: NextRequest) {
     // Best-effort: bootstrap default Omada site for the reseller
     void OmadaService.ensureResellerSite(result.reseller.id, validated.companyName).catch((err) => {
       console.error("[Admin Resellers POST] ensureResellerSite failed:", err);
+    });
+    await ResellerPlanService.assignInitialPlan(result.reseller.id).catch((err) => {
+      console.error("[Admin Resellers POST] assignInitialPlan failed:", err);
     });
 
     return apiSuccess({

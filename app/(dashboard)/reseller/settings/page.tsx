@@ -1,12 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Save, KeyRound, Bell, BookOpen, Shield, Zap, Clock, Monitor } from "lucide-react";
+import { Loader2, Save, KeyRound, Bell, Shield, Zap, Clock, Monitor, CreditCard } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 
 type SettingsPayload = {
   account: { email: string | null; phone: string | null; emailVerified: boolean; memberSince: string };
-  subscription: { active: boolean; commissionRate: number | null; brandSlug: string | null };
+  subscription: { active: boolean; accountActive: boolean; commissionRate: number | null; brandSlug: string | null };
+  platformPlan: {
+    subscription: {
+      status: string;
+      currentPeriodEnd: string;
+      trialEndsAt: string | null;
+      cancelAtPeriodEnd: boolean;
+      plan: Plan;
+    } | null;
+    usage: { sites: number; devices: number; activeClients: number };
+    limits: { maxSites: number | null; maxDevices: number | null; maxActiveClients: number | null; maxStaff: number | null } | null;
+    features: {
+      customBranding: boolean;
+      customDomain: boolean;
+      smsNotifications: boolean;
+      prioritySupport: boolean;
+      apiAccess: boolean;
+    } | null;
+    atCapacity: { sites: boolean; devices: boolean; activeClients: boolean };
+  };
   notifications: {
     id: string;
     emailOnPayment: boolean;
@@ -22,8 +41,26 @@ type SettingsPayload = {
   security: { recentLogins: { createdAt: string; ipAddress: string | null }[] };
 };
 
+type Plan = {
+  id: string;
+  slug: string;
+  name: string;
+  price: number;
+  currency: string;
+  interval: string;
+  trialDays: number;
+};
+
+function formatTzs(n: number) {
+  if (n <= 0) return "Free";
+  return new Intl.NumberFormat("en-TZ", { style: "currency", currency: "TZS", minimumFractionDigits: 0 }).format(n);
+}
+
 export default function ResellerSettingsPage() {
+  const [requestedPlanSlug, setRequestedPlanSlug] = useState("");
   const [s, setS] = useState<SettingsPayload | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
@@ -43,7 +80,32 @@ export default function ResellerSettingsPage() {
 
   useEffect(() => {
     void load();
+    try {
+      setRequestedPlanSlug(new URLSearchParams(window.location.search).get("plan")?.trim().toLowerCase() || "");
+    } catch {
+      setRequestedPlanSlug("");
+    }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/v1/plans");
+      const json = await res.json().catch(() => ({}));
+      if (!cancelled && json.success && Array.isArray(json.data)) {
+        setPlans(json.data);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!plans.length || selectedPlanId) return;
+    const requested = requestedPlanSlug ? plans.find((p) => p.slug === requestedPlanSlug) : null;
+    setSelectedPlanId(requested?.id || s?.platformPlan.subscription?.plan.id || plans[0].id);
+  }, [plans, requestedPlanSlug, s?.platformPlan.subscription?.plan.id, selectedPlanId]);
 
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -89,9 +151,9 @@ export default function ResellerSettingsPage() {
         emailOnWithdrawal: notif.emailOnWithdrawal,
         emailOnNewClient: notif.emailOnNewClient,
         emailOnDeviceDown: notif.emailOnDeviceDown,
-        smsOnPayment: notif.smsOnPayment,
-        smsOnWithdrawal: notif.smsOnWithdrawal,
-        smsOnDeviceDown: notif.smsOnDeviceDown,
+        smsOnPayment: s?.platformPlan.features?.smsNotifications ? notif.smsOnPayment : false,
+        smsOnWithdrawal: s?.platformPlan.features?.smsNotifications ? notif.smsOnWithdrawal : false,
+        smsOnDeviceDown: s?.platformPlan.features?.smsNotifications ? notif.smsOnDeviceDown : false,
         emailAddress: notif.emailAddress || null,
         smsPhone: notif.smsPhone || null,
       }),
@@ -105,6 +167,54 @@ export default function ResellerSettingsPage() {
     }
   }
 
+  async function subscribePlan() {
+    if (!selectedPlanId) return;
+    setBusy("billing");
+    setErr(null);
+    const res = await fetch("/api/v1/reseller/billing", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+      },
+      body: JSON.stringify({ action: "subscribe", planId: selectedPlanId, phone: s?.account.phone || undefined }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setBusy(null);
+    if (!res.ok || json.success === false) {
+      setErr(json.error || "Could not start plan subscription");
+      return;
+    }
+    if (json.data?.checkoutUrl) {
+      window.location.href = json.data.checkoutUrl;
+      return;
+    }
+    await load();
+  }
+
+  async function cancelPlan() {
+    if (!confirm("Cancel this platform plan at period end?")) return;
+    setBusy("billing");
+    setErr(null);
+    const res = await fetch("/api/v1/reseller/billing", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+      },
+      body: JSON.stringify({ action: "cancel" }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setBusy(null);
+    if (!res.ok || json.success === false) {
+      setErr(json.error || "Could not cancel plan");
+      return;
+    }
+    await load();
+  }
+
   if (loading || !s) {
     return (
       <div className="flex items-center gap-3 py-20 text-onyx-400">
@@ -112,6 +222,10 @@ export default function ResellerSettingsPage() {
       </div>
     );
   }
+
+  const currentPlatformSub = s.platformPlan.subscription;
+  const canUseSms = Boolean(s.platformPlan.features?.smsNotifications);
+  const canUseApi = Boolean(s.platformPlan.features?.apiAccess);
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -123,44 +237,92 @@ export default function ResellerSettingsPage() {
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
 
-      {/* ── Subscription & API ── */}
+      {/* ── Platform plan & API ── */}
       <section className="rounded-2xl border border-gold-10 bg-gradient-to-br from-gold-5/20 via-transparent to-transparent p-5 space-y-4 relative overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-gold-20 to-transparent opacity-50" />
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gold-10 flex items-center justify-center">
             <Zap className="w-4 h-4 text-gold" />
           </div>
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Subscription & API</h2>
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Platform plan & API</h2>
         </div>
         <div className="grid sm:grid-cols-3 gap-3">
           <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Status</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Plan status</div>
             <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold border mt-1 ${
               s.subscription.active
                 ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                 : "bg-red-500/10 text-red-400 border-red-500/15"
             }`}>
               <span className={`w-1.5 h-1.5 rounded-full ${s.subscription.active ? "bg-emerald-400" : "bg-red-400"}`} />
-              {s.subscription.active ? "Active" : "Inactive"}
+              {currentPlatformSub?.status || (s.subscription.active ? "Active" : "No plan")}
             </span>
           </div>
           <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Commission</div>
-            <div className="text-lg font-black text-gold mt-1">{s.subscription.commissionRate != null ? `${Math.round(s.subscription.commissionRate * 100)}%` : "—"}</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Current plan</div>
+            <div className="text-lg font-black text-gold mt-1">{currentPlatformSub?.plan.name || "—"}</div>
           </div>
           <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Slug</div>
-            <div className="text-sm font-mono text-white mt-1">@{s.subscription.brandSlug}</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Period end</div>
+            <div className="text-sm text-white mt-1">
+              {currentPlatformSub ? new Date(currentPlatformSub.currentPeriodEnd).toLocaleDateString() : "—"}
+            </div>
           </div>
         </div>
+        <div className="grid sm:grid-cols-3 gap-3">
+          {[
+            ["Sites", s.platformPlan.usage.sites, s.platformPlan.limits?.maxSites],
+            ["APs", s.platformPlan.usage.devices, s.platformPlan.limits?.maxDevices],
+            ["Active clients", s.platformPlan.usage.activeClients, s.platformPlan.limits?.maxActiveClients],
+          ].map(([label, used, limit]) => (
+            <div key={label as string} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">{label as string}</div>
+              <div className="text-sm font-bold text-white mt-1">
+                {used as number} / {limit == null ? "∞" : (limit as number)}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-xl border border-white/[0.08] bg-onyx-950/40 p-4 space-y-3">
+          <div className="grid sm:grid-cols-[1fr_auto] gap-3">
+            <select
+              value={selectedPlanId}
+              onChange={(e) => setSelectedPlanId(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-white focus:border-gold-30 outline-none"
+            >
+              {plans.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {formatTzs(p.price)} / {p.interval.toLowerCase()}
+                  {p.trialDays > 0 ? ` (${p.trialDays} day trial)` : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void subscribePlan()}
+              disabled={busy === "billing" || !selectedPlanId}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-gold px-5 py-2.5 text-sm font-bold text-onyx-950 disabled:opacity-50"
+            >
+              <CreditCard className="w-4 h-4" />
+              {busy === "billing" ? "Working…" : currentPlatformSub ? "Change plan" : "Start plan"}
+            </button>
+          </div>
+          {currentPlatformSub && !currentPlatformSub.cancelAtPeriodEnd && (
+            <button type="button" onClick={() => void cancelPlan()} className="text-xs font-semibold text-red-300 hover:underline">
+              Cancel at period end
+            </button>
+          )}
+          {currentPlatformSub?.cancelAtPeriodEnd && <p className="text-xs text-amber-200">Cancellation is scheduled at period end.</p>}
+        </div>
         <p className="text-xs text-onyx-500">
-          Reseller OpenAPI spec (use session Bearer token):{" "}
-          <a className="text-gold hover:underline font-mono" href="/api/v1/reseller/docs" target="_blank" rel="noreferrer">
-            /api/v1/reseller/docs
-          </a>{" "}
-          — open in browser while logged in, or copy your token from devtools Application → Local Storage →
-          ssdomada_token and pass{" "}
-          <code className="text-onyx-400">Authorization: Bearer …</code>
+          API access:{" "}
+          {canUseApi ? (
+            <a className="text-gold hover:underline font-mono" href="/api/v1/reseller/docs" target="_blank" rel="noreferrer">
+              /api/v1/reseller/docs
+            </a>
+          ) : (
+            <span className="text-onyx-400">not included in this plan</span>
+          )}
         </p>
       </section>
 
@@ -239,7 +401,9 @@ export default function ResellerSettingsPage() {
                 ["smsOnDeviceDown", "SMS on device down", "sms"],
               ] as const
             ).map(([key, label, type]) => (
-              <label key={key} className={`flex items-center justify-between gap-3 rounded-xl px-4 py-3 cursor-pointer transition-colors ${
+              <label key={key} className={`flex items-center justify-between gap-3 rounded-xl px-4 py-3 transition-colors ${
+                type === "sms" && !canUseSms ? "cursor-not-allowed opacity-45" : "cursor-pointer"
+              } ${
                 notif[key]
                   ? "border border-gold-20 bg-gold-5/20"
                   : "border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
@@ -252,6 +416,7 @@ export default function ResellerSettingsPage() {
                   <input
                     type="checkbox"
                     checked={!!notif[key]}
+                    disabled={type === "sms" && !canUseSms}
                     onChange={(e) => setNotif((n) => ({ ...n, [key]: e.target.checked }))}
                     className="sr-only"
                   />

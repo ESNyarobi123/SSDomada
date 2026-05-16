@@ -2,6 +2,23 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { updateCaptivePortalSchema } from "@/lib/validations/reseller";
+import { checkFeatureAccess, getPlanAccessSnapshot } from "@/server/services/reseller-plan-access.service";
+
+const BRANDING_FIELDS = new Set([
+  "logo",
+  "bgImage",
+  "bgColor",
+  "primaryColor",
+  "accentColor",
+  "companyName",
+  "welcomeText",
+  "customCss",
+  "customHtml",
+  "template",
+  "showLogo",
+  "showSocial",
+  "socialLinks",
+]);
 
 /**
  * GET /api/v1/reseller/captive-portal
@@ -45,6 +62,7 @@ export async function GET(req: NextRequest) {
     });
 
     const portalUrl = `/portal/${ctx.brandSlug}`;
+    const planAccess = await getPlanAccessSnapshot(ctx.resellerId);
 
     return apiSuccess({
       config,
@@ -52,6 +70,7 @@ export async function GET(req: NextRequest) {
       portalUrl,
       previewUrl: `${portalUrl}?preview=true`,
       availableTemplates: ["default", "modern", "minimal", "dark"],
+      planFeatures: planAccess.features,
     });
   } catch (error) {
     console.error("[Reseller Captive Portal GET] Error:", error);
@@ -70,6 +89,13 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
     const validated = updateCaptivePortalSchema.parse(body);
+    const touchesBranding = Object.keys(validated).some((key) => BRANDING_FIELDS.has(key));
+    if (touchesBranding) {
+      const featureGate = await checkFeatureAccess(ctx.resellerId, "customBranding");
+      if (!featureGate.ok) {
+        return apiError(featureGate.message, featureGate.statusCode, featureGate.code);
+      }
+    }
 
     const config = await prisma.captivePortalConfig.upsert({
       where: { resellerId: ctx.resellerId },

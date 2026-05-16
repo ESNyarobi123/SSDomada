@@ -3,6 +3,7 @@ import { prisma } from "@/server/lib/prisma";
 import { PaymentService } from "@/server/services/payment.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 import type { SnippeMobileProvider } from "@/server/services/snippe.service";
+import { checkCapacity } from "@/server/services/reseller-plan-access.service";
 
 interface RouteParams {
   params: Promise<{ slug: string }>;
@@ -91,6 +92,19 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
     if (!pkg) {
       return NextResponse.json({ error: "Package not available" }, { status: 404 });
+    }
+
+    const clientGate = await checkCapacity(reseller.id, "activeClients");
+    if (!clientGate.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: clientGate.message,
+          code: clientGate.code,
+          hint: clientGate.hint,
+        },
+        { status: clientGate.statusCode },
+      );
     }
 
     // 4. Normalise phone — required for mobile, optional for card.

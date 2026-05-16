@@ -40,11 +40,26 @@ type PlanRow = {
   _count: { subscriptions: number };
 };
 
-function numOrNull(v: string): number | null {
+function limitOrNull(label: string, v: string): number | null {
   const t = v.trim();
   if (t === "") return null;
   const n = Number(t);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`${label} must be a whole number greater than 0, or empty for unlimited.`);
+  }
+  return n;
+}
+
+function wholeNumber(label: string, v: string, min: number, max?: number): number {
+  const t = v.trim();
+  if (t === "") {
+    throw new Error(`${label} is required.`);
+  }
+  const n = Number(t);
+  if (!Number.isInteger(n) || n < min || (max != null && n > max)) {
+    throw new Error(`${label} must be a whole number${max != null ? ` between ${min} and ${max}` : ` >= ${min}`}.`);
+  }
+  return n;
 }
 
 export default function AdminPlatformPlansPage() {
@@ -242,27 +257,33 @@ function PlanModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const payload: Record<string, unknown> = {
-      name: name.trim(),
-      slug: slug.trim().toLowerCase(),
-      description: description.trim() || null,
-      price: Math.round(Number(price)) || 0,
-      currency: currency.trim() || "TZS",
-      interval,
-      trialDays: Math.min(730, Math.max(0, Math.round(Number(trialDays)) || 0)),
-      maxSites: numOrNull(maxSites),
-      maxDevices: numOrNull(maxDevices),
-      maxActiveClients: numOrNull(maxActiveClients),
-      maxStaff: numOrNull(maxStaff),
-      customBranding,
-      customDomain,
-      smsNotifications,
-      prioritySupport,
-      apiAccess,
-      isActive,
-      isFeatured,
-      sortOrder: Math.round(Number(sortOrder)) || 0,
-    };
+    let payload: Record<string, unknown>;
+    try {
+      payload = {
+        name: name.trim(),
+        slug: slug.trim().toLowerCase(),
+        description: description.trim() || null,
+        price: wholeNumber("Price", price, 0),
+        currency: currency.trim() || "TZS",
+        interval,
+        trialDays: wholeNumber("Trial days", trialDays, 0, 730),
+        maxSites: limitOrNull("Max sites", maxSites),
+        maxDevices: limitOrNull("Max devices", maxDevices),
+        maxActiveClients: limitOrNull("Max active clients", maxActiveClients),
+        maxStaff: limitOrNull("Max staff", maxStaff),
+        customBranding,
+        customDomain,
+        smsNotifications,
+        prioritySupport,
+        apiAccess,
+        isActive,
+        isFeatured,
+        sortOrder: wholeNumber("Sort order", sortOrder, -100000),
+      };
+    } catch (er: unknown) {
+      alert(er instanceof Error ? er.message : "Invalid numbers");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -381,6 +402,9 @@ function PlanModal({
             <label className="space-y-1 block">
               <span className="text-onyx-400">Max sites</span>
               <input
+                type="number"
+                min={1}
+                step={1}
                 value={maxSites}
                 onChange={(e) => setMaxSites(e.target.value)}
                 placeholder="empty = ∞"
@@ -390,6 +414,9 @@ function PlanModal({
             <label className="space-y-1 block">
               <span className="text-onyx-400">Max devices</span>
               <input
+                type="number"
+                min={1}
+                step={1}
                 value={maxDevices}
                 onChange={(e) => setMaxDevices(e.target.value)}
                 placeholder="empty = ∞"
@@ -399,6 +426,9 @@ function PlanModal({
             <label className="space-y-1 block">
               <span className="text-onyx-400">Max active clients</span>
               <input
+                type="number"
+                min={1}
+                step={1}
                 value={maxActiveClients}
                 onChange={(e) => setMaxActiveClients(e.target.value)}
                 placeholder="empty = ∞"
@@ -408,6 +438,9 @@ function PlanModal({
             <label className="space-y-1 block">
               <span className="text-onyx-400">Max staff</span>
               <input
+                type="number"
+                min={1}
+                step={1}
                 value={maxStaff}
                 onChange={(e) => setMaxStaff(e.target.value)}
                 placeholder="empty = ∞"
@@ -418,7 +451,7 @@ function PlanModal({
           <div className="grid grid-cols-2 gap-2 text-xs">
             {[
               ["Custom branding", customBranding, setCustomBranding],
-              ["Custom domain", customDomain, setCustomDomain],
+              ["Custom domain support", customDomain, setCustomDomain],
               ["SMS notifications", smsNotifications, setSmsNotifications],
               ["Priority support", prioritySupport, setPrioritySupport],
               ["API access", apiAccess, setApiAccess],

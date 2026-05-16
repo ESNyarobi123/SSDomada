@@ -5,6 +5,7 @@ import { createSsidSchema } from "@/lib/validations/reseller";
 import { OmadaService } from "@/server/services/omada.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
 import { getResellerOmadaPortalName } from "@/server/lib/reseller-portal-display-name";
+import { ensureActiveResellerPlan } from "@/server/middleware/paywall";
 
 /**
  * GET /api/v1/reseller/ssids
@@ -43,6 +44,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
   if (ctx instanceof Response) return ctx;
+
+  const planGate = await ensureActiveResellerPlan(ctx.resellerId);
+  if (planGate) return planGate;
 
   try {
     const body = await req.json();

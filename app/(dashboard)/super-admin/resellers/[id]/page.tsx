@@ -209,7 +209,7 @@ export default function AdminResellerDetailPage() {
           currentPeriodEnd: row.planSubscription.currentPeriodEnd.slice(0, 16),
         });
       } else {
-        setPlanForm({ planId: "", status: "", currentPeriodEnd: "" });
+        setPlanForm((f) => ({ planId: f.planId, status: "ACTIVE", currentPeriodEnd: "" }));
       }
     }
   }, [id]);
@@ -277,7 +277,10 @@ export default function AdminResellerDetailPage() {
     void (async () => {
       const res = await fetch("/api/v1/plans");
       const json = await res.json().catch(() => ({}));
-      if (json.success && Array.isArray(json.data)) setPublicPlans(json.data);
+      if (json.success && Array.isArray(json.data)) {
+        setPublicPlans(json.data);
+        setPlanForm((f) => (f.planId || !json.data.length ? f : { ...f, planId: json.data[0].id }));
+      }
     })();
   }, [tab]);
 
@@ -406,7 +409,10 @@ export default function AdminResellerDetailPage() {
 
   async function savePlatformPlan(e: React.FormEvent) {
     e.preventDefault();
-    if (!d?.planSubscription) return;
+    if (!planForm.planId) {
+      alert("Select a platform plan first.");
+      return;
+    }
     setBusy(true);
     const res = await authFetch(`/api/v1/admin/resellers/${id}/platform-plan`, {
       method: "PATCH",
@@ -1015,73 +1021,69 @@ export default function AdminResellerDetailPage() {
 
       {tab === "platform" && (
         <div className="max-w-xl">
-          {!d.planSubscription ? (
-            <div className="rounded-2xl border border-white/10 bg-onyx-900/40 p-6 text-onyx-400">
-              <p>This reseller has no SSDomada platform subscription record yet.</p>
-              <p className="mt-3 text-xs">
-                <Link href="/super-admin/platform-plans" className="text-gold font-semibold hover:underline">
-                  Manage platform plans catalog
-                </Link>{" "}
-                — then assign a plan from the list above once a subscription row exists.
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={savePlatformPlan} className="rounded-2xl border border-white/10 bg-onyx-900/40 p-6 space-y-4">
-              <h2 className="flex items-center gap-2 text-lg font-bold text-white">
-                <Shield className="h-5 w-5 text-gold" />
-                Platform billing
-              </h2>
-              <p className="text-xs text-onyx-500">
-                <Link href="/super-admin/platform-plans" className="text-gold font-semibold hover:underline">
-                  Edit plan catalog (pricing & limits)
-                </Link>
-              </p>
-              <label className="block text-sm space-y-1">
-                <span className="text-onyx-400">Plan</span>
-                <select
-                  className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
-                  value={planForm.planId}
-                  onChange={(e) => setPlanForm((f) => ({ ...f, planId: e.target.value }))}
-                >
-                  {publicPlans.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} — {formatTzs(p.price)} / {p.interval}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm space-y-1">
-                <span className="text-onyx-400">Status</span>
-                <select
-                  className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
-                  value={planForm.status}
-                  onChange={(e) => setPlanForm((f) => ({ ...f, status: e.target.value }))}
-                >
-                  {["TRIAL", "ACTIVE", "PAST_DUE", "EXPIRED", "CANCELLED"].map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm space-y-1">
-                <span className="text-onyx-400">Current period end</span>
-                <input
-                  type="datetime-local"
-                  className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
-                  value={planForm.currentPeriodEnd}
-                  onChange={(e) => setPlanForm((f) => ({ ...f, currentPeriodEnd: e.target.value }))}
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={busy}
-                className="rounded-xl bg-gold px-5 py-2.5 text-sm font-bold text-onyx-950 disabled:opacity-50"
+          <form onSubmit={savePlatformPlan} className="rounded-2xl border border-white/10 bg-onyx-900/40 p-6 space-y-4">
+            <h2 className="flex items-center gap-2 text-lg font-bold text-white">
+              <Shield className="h-5 w-5 text-gold" />
+              Platform billing
+            </h2>
+            {!d.planSubscription && (
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                This reseller has no platform subscription row yet. Saving this form will create one.
+              </div>
+            )}
+            <p className="text-xs text-onyx-500">
+              <Link href="/super-admin/platform-plans" className="text-gold font-semibold hover:underline">
+                Edit plan catalog (pricing & limits)
+              </Link>
+            </p>
+            <label className="block text-sm space-y-1">
+              <span className="text-onyx-400">Plan</span>
+              <select
+                className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
+                value={planForm.planId}
+                onChange={(e) => setPlanForm((f) => ({ ...f, planId: e.target.value }))}
               >
-                Save platform plan
-              </button>
-            </form>
-          )}
+                {publicPlans.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} — {formatTzs(p.price)} / {p.interval}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm space-y-1">
+              <span className="text-onyx-400">Status</span>
+              <select
+                className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
+                value={planForm.status}
+                onChange={(e) => setPlanForm((f) => ({ ...f, status: e.target.value }))}
+              >
+                {["TRIAL", "ACTIVE", "PAST_DUE", "EXPIRED", "CANCELLED"].map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm space-y-1">
+              <span className="text-onyx-400">Current period end</span>
+              <input
+                type="datetime-local"
+                className="w-full rounded-xl border border-white/10 bg-onyx-950 px-3 py-2 text-white"
+                value={planForm.currentPeriodEnd}
+                onChange={(e) => setPlanForm((f) => ({ ...f, currentPeriodEnd: e.target.value }))}
+              />
+              <span className="block text-[11px] text-onyx-500">
+                Leave empty on a new row to use the selected plan interval or trial period.
+              </span>
+            </label>
+            <button
+              type="submit"
+              disabled={busy || !publicPlans.length}
+              className="rounded-xl bg-gold px-5 py-2.5 text-sm font-bold text-onyx-950 disabled:opacity-50"
+            >
+              Save platform plan
+            </button>
+          </form>
         </div>
       )}
 

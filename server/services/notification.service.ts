@@ -1,4 +1,5 @@
 import { prisma } from "@/server/lib/prisma";
+import { getPlanAccessSnapshot } from "@/server/services/reseller-plan-access.service";
 
 /**
  * NOTIFICATION SERVICE
@@ -111,6 +112,8 @@ export class NotificationService {
     if (!reseller) return;
 
     const pref = reseller.notificationPreference;
+    const planAccess = await getPlanAccessSnapshot(resellerId);
+    const smsAllowed = planAccess.access.ok && planAccess.features.smsNotifications;
     const subject = `New payment: ${opts.currency} ${opts.amount.toLocaleString()}`;
     const text = `You received a payment of ${opts.currency} ${opts.amount.toLocaleString()}${opts.packageName ? ` for ${opts.packageName}` : ""}${opts.customerPhone ? ` from ${opts.customerPhone}` : ""}.`;
 
@@ -119,7 +122,7 @@ export class NotificationService {
       const to = pref?.emailAddress || reseller.user.email;
       if (to) tasks.push(sendEmail({ to, subject, text }));
     }
-    if (pref?.smsOnPayment) {
+    if (smsAllowed && pref?.smsOnPayment) {
       const to = pref.smsPhone || reseller.phone;
       if (to) tasks.push(sendSms({ to, text }));
     }
@@ -136,6 +139,8 @@ export class NotificationService {
     });
     if (!reseller) return;
     const pref = reseller.notificationPreference;
+    const planAccess = await getPlanAccessSnapshot(resellerId);
+    const smsAllowed = planAccess.access.ok && planAccess.features.smsNotifications;
     const subject = `Device offline: ${deviceName}`;
     const text = `Your device "${deviceName}" (${deviceMac}) has gone offline. Please check it.`;
     const tasks: Promise<unknown>[] = [];
@@ -143,7 +148,7 @@ export class NotificationService {
       const to = pref.emailAddress || reseller.user.email;
       if (to) tasks.push(sendEmail({ to, subject, text }));
     }
-    if (pref?.smsOnDeviceDown) {
+    if (smsAllowed && pref?.smsOnDeviceDown) {
       const to = pref.smsPhone || reseller.phone;
       if (to) tasks.push(sendSms({ to, text }));
     }

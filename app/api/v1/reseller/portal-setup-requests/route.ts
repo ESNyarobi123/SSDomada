@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/server/lib/prisma";
 import { buildPortalSetupSnapshot } from "@/server/lib/portal-setup-snapshot";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
+import { ensureActiveResellerPlan } from "@/server/middleware/paywall";
 
 const postSchema = z.object({
   siteId: z.string().cuid().optional().nullable(),
@@ -16,6 +17,9 @@ const postSchema = z.object({
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
   if (ctx instanceof Response) return ctx;
+
+  const planGate = await ensureActiveResellerPlan(ctx.resellerId);
+  if (planGate) return planGate;
 
   try {
     const json = await req.json().catch(() => ({}));

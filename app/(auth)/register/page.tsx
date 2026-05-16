@@ -16,6 +16,7 @@ function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const customerMode = searchParams.get("mode") === "customer";
+  const requestedPlanSlug = searchParams.get("plan")?.trim().toLowerCase() || "";
 
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
@@ -46,6 +47,7 @@ function RegisterForm() {
       if (role === "RESELLER") {
         body.companyName = companyName;
         if (brandSlug.trim()) body.brandSlug = brandSlug.trim();
+        if (requestedPlanSlug) body.planSlug = requestedPlanSlug;
       }
       const res = await fetch("/api/v1/auth", {
         method: "POST",
@@ -62,7 +64,11 @@ function RegisterForm() {
       }
       const user = json.data.user as AuthUser;
       setStoredToken(json.data.token);
-      router.push(redirectAfterAuth(user));
+      if (role === "RESELLER" && requestedPlanSlug) {
+        router.push(`/reseller/settings?plan=${encodeURIComponent(requestedPlanSlug)}`);
+      } else {
+        router.push(redirectAfterAuth(user));
+      }
       router.refresh();
     } catch {
       setError("Network error");

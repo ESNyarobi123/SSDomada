@@ -42,6 +42,7 @@ type CaptivePayload = {
   portalUrl: string;
   previewUrl: string;
   availableTemplates: string[];
+  planFeatures?: { customBranding: boolean };
 };
 
 type ResellerSite = {
@@ -127,6 +128,10 @@ export default function ResellerCaptivePortalPage() {
   }
 
   async function uploadCaptiveAsset(kind: "logo" | "bgImage", file: File) {
+    if (!payload?.planFeatures?.customBranding) {
+      setErr("Your current platform plan does not include custom branding.");
+      return;
+    }
     if (file.size > MAX_CAPTIVE_IMAGE_BYTES) {
       setErr("Image must be 2 MB or smaller (PNG, JPEG, WebP, GIF).");
       return;
@@ -158,25 +163,30 @@ export default function ResellerCaptivePortalPage() {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (!payload) return;
     setSaving(true);
     setErr(null);
     setOk(null);
-    const body = {
-      logo: form.logo || null,
-      bgImage: form.bgImage || null,
-      bgColor: form.bgColor,
-      primaryColor: form.primaryColor,
-      accentColor: form.accentColor,
-      companyName: form.companyName || undefined,
-      welcomeText: form.welcomeText || undefined,
+    const body: Record<string, unknown> = {
       termsUrl: form.termsUrl || null,
       termsText: form.termsText || null,
-      template: form.template,
       redirectUrl: form.redirectUrl || null,
-      showLogo: form.showLogo,
-      showSocial: form.showSocial,
-      socialLinks: form.socialLinks || undefined,
     };
+    if (payload.planFeatures?.customBranding) {
+      Object.assign(body, {
+        logo: form.logo || null,
+        bgImage: form.bgImage || null,
+        bgColor: form.bgColor,
+        primaryColor: form.primaryColor,
+        accentColor: form.accentColor,
+        companyName: form.companyName || undefined,
+        welcomeText: form.welcomeText || undefined,
+        template: form.template,
+        showLogo: form.showLogo,
+        showSocial: form.showSocial,
+        socialLinks: form.socialLinks || undefined,
+      });
+    }
     const res = await fetch("/api/v1/reseller/captive-portal", {
       method: "PUT",
       credentials: "include",
@@ -206,6 +216,7 @@ export default function ResellerCaptivePortalPage() {
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const previewFull = `${origin}${payload.previewUrl}`;
+  const canUseCustomBranding = Boolean(payload.planFeatures?.customBranding);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -237,6 +248,11 @@ export default function ResellerCaptivePortalPage() {
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
       {ok && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{ok}</div>}
+      {!canUseCustomBranding && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Your current platform plan does not include custom branding. Legal text and redirect settings can still be updated.
+        </div>
+      )}
 
       {/* ── Preview iframe ── */}
       <div className="rounded-2xl border border-gold-10 bg-gradient-to-br from-gold-5/20 via-transparent to-transparent overflow-hidden">
@@ -270,7 +286,8 @@ export default function ResellerCaptivePortalPage() {
               <input
                 value={(form.companyName as string) || ""}
                 onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                disabled={!canUseCustomBranding}
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors disabled:opacity-45"
               />
             </div>
             <div>
@@ -278,7 +295,8 @@ export default function ResellerCaptivePortalPage() {
               <input
                 value={(form.welcomeText as string) || ""}
                 onChange={(e) => setForm((f) => ({ ...f, welcomeText: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                disabled={!canUseCustomBranding}
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors disabled:opacity-45"
               />
             </div>
           </div>
@@ -310,7 +328,7 @@ export default function ResellerCaptivePortalPage() {
                 <input
                   type="file"
                   accept={CAPTIVE_IMAGE_ACCEPT}
-                  disabled={uploading === "logo"}
+                  disabled={!canUseCustomBranding || uploading === "logo"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     e.target.value = "";
@@ -352,7 +370,7 @@ export default function ResellerCaptivePortalPage() {
                 <input
                   type="file"
                   accept={CAPTIVE_IMAGE_ACCEPT}
-                  disabled={uploading === "bgImage"}
+                  disabled={!canUseCustomBranding || uploading === "bgImage"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     e.target.value = "";
@@ -386,6 +404,7 @@ export default function ResellerCaptivePortalPage() {
                   key={t}
                   type="button"
                   onClick={() => setForm((f) => ({ ...f, template: t }))}
+                  disabled={!canUseCustomBranding}
                   className={`rounded-xl px-4 py-2 text-xs font-bold capitalize border transition-all ${
                     form.template === t
                       ? "border-gold-30 text-gold bg-gold-10 shadow-sm shadow-gold/5"
@@ -405,16 +424,18 @@ export default function ResellerCaptivePortalPage() {
                 </label>
                 <div className="mt-1.5 flex gap-2 items-center">
                   <input
-                    type="color"
-                    value={(form[key] as string)?.startsWith("#") ? (form[key] as string) : "#ffffff"}
-                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-                    className="h-10 w-14 rounded-lg border border-gold-10 bg-transparent cursor-pointer"
-                  />
-                  <input
-                    value={(form[key] as string) || "#ffffff"}
-                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-                    className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-mono text-white focus:border-gold-30 outline-none transition-colors"
-                  />
+                  type="color"
+                  value={(form[key] as string)?.startsWith("#") ? (form[key] as string) : "#ffffff"}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                  disabled={!canUseCustomBranding}
+                  className="h-10 w-14 rounded-lg border border-gold-10 bg-transparent cursor-pointer disabled:opacity-45"
+                />
+                <input
+                  value={(form[key] as string) || "#ffffff"}
+                  onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                  disabled={!canUseCustomBranding}
+                  className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-mono text-white focus:border-gold-30 outline-none transition-colors disabled:opacity-45"
+                />
                 </div>
               </div>
             ))}
@@ -468,6 +489,7 @@ export default function ResellerCaptivePortalPage() {
                 type="checkbox"
                 checked={!!form.showLogo}
                 onChange={(e) => setForm((f) => ({ ...f, showLogo: e.target.checked }))}
+                disabled={!canUseCustomBranding}
                 className="w-4 h-4 rounded border-gold-30 bg-white/[0.04] text-gold focus:ring-gold/20"
               />
               Show logo
@@ -477,6 +499,7 @@ export default function ResellerCaptivePortalPage() {
                 type="checkbox"
                 checked={!!form.showSocial}
                 onChange={(e) => setForm((f) => ({ ...f, showSocial: e.target.checked }))}
+                disabled={!canUseCustomBranding}
                 className="w-4 h-4 rounded border-gold-30 bg-white/[0.04] text-gold focus:ring-gold/20"
               />
               Show social links

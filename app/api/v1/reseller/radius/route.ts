@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { RadiusService } from "@/server/services/radius.service";
 import { paginationSchema } from "@/lib/validations/reseller";
+import { ensureActiveResellerPlan, ensureCapacity } from "@/server/middleware/paywall";
 
 /**
  * GET /api/v1/reseller/radius
@@ -61,6 +62,11 @@ export async function POST(req: NextRequest) {
 
     // === GRANT MANUAL ACCESS ===
     if (action === "grant") {
+      const planGate = await ensureActiveResellerPlan(ctx.resellerId);
+      if (planGate) return planGate;
+      const capGate = await ensureCapacity(ctx.resellerId, "activeClients");
+      if (capGate) return capGate;
+
       const { clientMac, sessionTimeoutMinutes, expiresInMinutes, bandwidthUpKbps, bandwidthDownKbps, maxSessions } = body;
 
       if (!clientMac) return apiError("clientMac is required", 400);

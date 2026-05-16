@@ -203,7 +203,7 @@ export const updateProfileSchema = z.object({
   phone: z.string().optional(),
   address: z.string().max(200).optional(),
   logo: z.string().url().optional().nullable(),
-  description: z.string().max(500).optional(),
+  description: z.string().max(500).optional().nullable(),
 });
 
 // ============================================================

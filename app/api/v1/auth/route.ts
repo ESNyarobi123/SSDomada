@@ -54,6 +54,7 @@ const registerSchema = z.object({
   phone: z.string().max(30).optional(),
   companyName: z.string().min(1).max(200).optional(),
   brandSlug: z.string().max(60).optional(),
+  planSlug: z.string().min(2).max(60).regex(/^[a-z0-9-]+$/).optional(),
 });
 
 function getToken(req: NextRequest): string | null {
@@ -125,6 +126,7 @@ export async function POST(req: NextRequest) {
         role: d.role,
         companyName: d.companyName,
         brandSlug: d.brandSlug,
+        planSlug: d.planSlug,
       });
       if ("error" in reg) {
         return NextResponse.json({ success: false, error: "Email already registered", code: reg.error }, { status: 409 });

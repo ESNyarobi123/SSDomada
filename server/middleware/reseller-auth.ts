@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 
+const AUTH_COOKIE = "ssdomada_session";
+
 /**
  * Reseller authentication context — guarantees tenant isolation.
  * Every query in reseller routes MUST use ctx.resellerId to scope data.
@@ -26,7 +28,9 @@ export interface ResellerContext {
 export async function verifyReseller(req: NextRequest): Promise<ResellerContext | NextResponse> {
   try {
     const authHeader = req.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.replace("Bearer ", "")
+      : req.cookies.get(AUTH_COOKIE)?.value;
 
     if (!token) {
       return NextResponse.json(

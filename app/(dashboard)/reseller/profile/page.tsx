@@ -16,6 +16,7 @@ type Profile = {
   portalUrl: string;
   user: { name: string | null; email: string | null; phone: string | null };
   stats: { devices: number; packages: number; sites: number; payments: number };
+  planFeatures?: { customBranding: boolean };
 };
 
 export default function ResellerProfilePage() {
@@ -63,6 +64,17 @@ export default function ResellerProfilePage() {
     setSaving(true);
     setErr(null);
     setOk(false);
+    const body: Record<string, unknown> = {
+      companyName: form.companyName.trim(),
+      phone: form.phone.trim() || undefined,
+      address: form.address.trim() || undefined,
+      name: form.name.trim() || undefined,
+    };
+    if (p?.planFeatures?.customBranding) {
+      body.logo = form.logo.trim() || null;
+      body.description = form.description.trim() || null;
+    }
+
     const res = await fetch("/api/v1/reseller/profile", {
       method: "PATCH",
       credentials: "include",
@@ -70,14 +82,7 @@ export default function ResellerProfilePage() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
       },
-      body: JSON.stringify({
-        companyName: form.companyName.trim(),
-        phone: form.phone.trim() || undefined,
-        address: form.address.trim() || undefined,
-        logo: form.logo.trim() || null,
-        description: form.description.trim() || undefined,
-        name: form.name.trim() || undefined,
-      }),
+      body: JSON.stringify(body),
     });
     const json = await res.json();
     setSaving(false);
@@ -102,6 +107,7 @@ export default function ResellerProfilePage() {
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const portal = `${origin}${p.portalUrl}`;
+  const canUseCustomBranding = Boolean(p.planFeatures?.customBranding);
 
   function initials(name: string | null) {
     if (!name) return "?";
@@ -240,11 +246,14 @@ export default function ResellerProfilePage() {
             />
           </div>
           <div>
-            <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Logo URL</label>
+            <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">
+              Logo URL {!canUseCustomBranding && <span className="text-onyx-500 normal-case">(upgrade required)</span>}
+            </label>
             <input
               value={form.logo}
               onChange={(e) => setForm((f) => ({ ...f, logo: e.target.value }))}
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+              disabled={!canUseCustomBranding}
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors disabled:opacity-45"
               placeholder="https://…"
             />
           </div>
@@ -282,7 +291,8 @@ export default function ResellerProfilePage() {
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               rows={3}
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors resize-y"
+              disabled={!canUseCustomBranding}
+              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors resize-y disabled:opacity-45"
             />
           </div>
           <div className="text-xs text-onyx-500">

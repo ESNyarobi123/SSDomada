@@ -36,7 +36,7 @@ function featuresOf(p: Plan) {
     { label: p.maxActiveClients == null ? "Unlimited active clients" : `${p.maxActiveClients} active clients`, ok: true },
     { label: "Custom branding", ok: p.customBranding },
     { label: "SMS notifications", ok: p.smsNotifications },
-    { label: "Custom domain", ok: p.customDomain },
+    { label: "Custom domain support", ok: p.customDomain },
     { label: "Priority support", ok: p.prioritySupport },
     { label: "API access", ok: p.apiAccess },
   ];

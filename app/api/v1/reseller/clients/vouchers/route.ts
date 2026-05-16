@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { createVoucherSchema, paginationSchema } from "@/lib/validations/reseller";
+import { ensureActiveResellerPlan } from "@/server/middleware/paywall";
 import crypto from "crypto";
 
 /**
@@ -57,6 +58,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
   if (ctx instanceof Response) return ctx;
+
+  const planGate = await ensureActiveResellerPlan(ctx.resellerId);
+  if (planGate) return planGate;
 
   try {
     const body = await req.json();

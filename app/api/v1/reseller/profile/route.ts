@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { updateProfileSchema } from "@/lib/validations/reseller";
+import { checkFeatureAccess, getPlanAccessSnapshot } from "@/server/services/reseller-plan-access.service";
 
 /**
  * GET /api/v1/reseller/profile
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
     });
 
     if (!reseller) return apiError("Profile not found", 404);
+    const planAccess = await getPlanAccessSnapshot(ctx.resellerId);
 
     return apiSuccess({
       id: reseller.id,
@@ -47,6 +49,7 @@ export async function GET(req: NextRequest) {
       captivePortal: reseller.captivePortalConfig,
       stats: reseller._count,
       portalUrl: `/portal/${reseller.brandSlug}`,
+      planFeatures: planAccess.features,
     });
   } catch (error) {
     console.error("[Reseller Profile GET] Error:", error);
@@ -66,6 +69,13 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
     const validated = updateProfileSchema.parse(body);
+    const touchesBranding = Object.prototype.hasOwnProperty.call(validated, "logo") || Object.prototype.hasOwnProperty.call(validated, "description");
+    if (touchesBranding) {
+      const featureGate = await checkFeatureAccess(ctx.resellerId, "customBranding");
+      if (!featureGate.ok) {
+        return apiError(featureGate.message, featureGate.statusCode, featureGate.code);
+      }
+    }
 
     const updated = await prisma.reseller.update({
       where: { id: ctx.resellerId },

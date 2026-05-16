@@ -1,5 +1,6 @@
 import { prisma } from "@/server/lib/prisma";
 import { SnippeService } from "./snippe.service";
+import { computeInitialSubscriptionState, computePlanPeriodEnd } from "./reseller-plan-access.service";
 
 /**
  * RESELLER PLAN SERVICE
@@ -50,6 +51,16 @@ export class ResellerPlanService {
             maxSites: plan.maxSites,
             maxDevices: plan.maxDevices,
             maxActiveClients: plan.maxActiveClients,
+            maxStaff: plan.maxStaff,
+          }
+        : null,
+      features: plan
+        ? {
+            customBranding: plan.customBranding,
+            customDomain: plan.customDomain,
+            smsNotifications: plan.smsNotifications,
+            prioritySupport: plan.prioritySupport,
+            apiAccess: plan.apiAccess,
           }
         : null,
       atCapacity: plan
@@ -61,6 +72,56 @@ export class ResellerPlanService {
           }
         : { sites: false, devices: false, activeClients: false },
     };
+  }
+
+  /**
+   * Assign the requested public plan during reseller onboarding when it can be
+   * activated without collecting money (free or trial). Falls back to the first
+   * active free/trial plan so new resellers are not locked out by the paywall.
+   */
+  static async assignInitialPlan(resellerId: string, requestedSlug?: string | null) {
+    const requested = requestedSlug
+      ? await (prisma as any).resellerPlan.findFirst({
+          where: { slug: requestedSlug, isActive: true },
+          orderBy: { sortOrder: "asc" },
+        })
+      : null;
+
+    const plan =
+      requested && (requested.price <= 0 || requested.trialDays > 0)
+        ? requested
+        : await (prisma as any).resellerPlan.findFirst({
+            where: {
+              isActive: true,
+              OR: [{ price: { lte: 0 } }, { trialDays: { gt: 0 } }],
+            },
+            orderBy: [{ sortOrder: "asc" }, { price: "asc" }],
+          });
+
+    if (!plan) return null;
+
+    const lifecycle = computeInitialSubscriptionState(plan);
+    return (prisma as any).resellerPlanSubscription.upsert({
+      where: { resellerId },
+      update: {
+        planId: plan.id,
+        status: lifecycle.status,
+        startedAt: lifecycle.startedAt,
+        currentPeriodEnd: lifecycle.currentPeriodEnd,
+        trialEndsAt: lifecycle.trialEndsAt,
+        cancelledAt: null,
+        cancelAtPeriodEnd: false,
+      },
+      create: {
+        resellerId,
+        planId: plan.id,
+        status: lifecycle.status,
+        startedAt: lifecycle.startedAt,
+        currentPeriodEnd: lifecycle.currentPeriodEnd,
+        trialEndsAt: lifecycle.trialEndsAt,
+      },
+      include: { plan: true },
+    });
   }
 
   /**
@@ -80,37 +141,31 @@ export class ResellerPlanService {
     });
     if (!plan || !plan.isActive) throw new Error("Plan not available");
 
-    // Compute current period end
     const now = new Date();
-    const end = new Date(now);
-    if (plan.interval === "MONTHLY") end.setMonth(end.getMonth() + 1);
-    else if (plan.interval === "YEARLY") end.setFullYear(end.getFullYear() + 1);
-    else if (plan.interval === "LIFETIME") end.setFullYear(end.getFullYear() + 100);
+    const end = computePlanPeriodEnd(plan, now);
+    const lifecycle = computeInitialSubscriptionState(plan, undefined, now);
 
-    const trialEnd = plan.trialDays > 0
-      ? new Date(now.getTime() + plan.trialDays * 24 * 60 * 60 * 1000)
-      : null;
-
-    // Free / trial flow — activate immediately
-    if (plan.price <= 0) {
+    // Free or free-trial flow — activate immediately. Paid plans without a
+    // trial still go through hosted checkout below.
+    if (plan.price <= 0 || plan.trialDays > 0) {
       const sub = await (prisma as any).resellerPlanSubscription.upsert({
         where: { resellerId: opts.resellerId },
         update: {
           planId: plan.id,
-          status: trialEnd ? "TRIAL" : "ACTIVE",
-          startedAt: now,
-          currentPeriodEnd: trialEnd ?? end,
-          trialEndsAt: trialEnd,
+          status: lifecycle.status,
+          startedAt: lifecycle.startedAt,
+          currentPeriodEnd: lifecycle.currentPeriodEnd,
+          trialEndsAt: lifecycle.trialEndsAt,
           cancelledAt: null,
           cancelAtPeriodEnd: false,
         },
         create: {
           resellerId: opts.resellerId,
           planId: plan.id,
-          status: trialEnd ? "TRIAL" : "ACTIVE",
-          startedAt: now,
-          currentPeriodEnd: trialEnd ?? end,
-          trialEndsAt: trialEnd,
+          status: lifecycle.status,
+          startedAt: lifecycle.startedAt,
+          currentPeriodEnd: lifecycle.currentPeriodEnd,
+          trialEndsAt: lifecycle.trialEndsAt,
         },
       });
       return { subscription: sub, checkoutUrl: null, requiresPayment: false };

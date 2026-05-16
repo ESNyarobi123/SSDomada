@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
+import { checkFeatureAccess } from "@/server/services/reseller-plan-access.service";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const ALLOWED = new Map<string, string>([
@@ -20,6 +21,11 @@ const ALLOWED = new Map<string, string>([
 export async function POST(req: NextRequest) {
   const ctx = await verifyReseller(req);
   if (ctx instanceof Response) return ctx;
+
+  const featureGate = await checkFeatureAccess(ctx.resellerId, "customBranding");
+  if (!featureGate.ok) {
+    return apiError(featureGate.message, featureGate.statusCode, featureGate.code);
+  }
 
   try {
     const form = await req.formData();
