@@ -371,12 +371,56 @@ export class OmadaService {
   }
 
   /**
-   * Deauthorize a client MAC address (revoke WiFi access)
+   * Deauthorize a client MAC address (revoke captive-portal auth state).
+   *
+   * NOTE: For SSIDs using **External Portal Server**, this OpenAPI command may
+   * be a no-op — those clients are authorised through `extPortal/auth` and the
+   * controller doesn't necessarily honour `cmd/clients/{mac}/unauthorize`.
+   * Always pair this with {@link disconnectClient} to forcibly kick the client
+   * from the AP so they re-hit the captive portal.
    */
   static async deauthorizeClient(omadaSiteId: string, clientMac: string) {
     return OmadaClient.post(
       `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/unauthorize`,
       {}
+    );
+  }
+
+  /**
+   * Force the client off the WiFi (drops their association on the AP).
+   *
+   * Combined with `deauthorizeClient`, this guarantees an expired user is
+   * actually pushed off the internet — without it Omada keeps existing
+   * connections alive even after auth state changes. The client will
+   * automatically reassociate and hit the captive portal again, where they
+   * will have to pay (or wait until their subscription is renewed).
+   *
+   * Omada Open API path:
+   *   POST .../sites/{siteId}/cmd/clients/{AA-BB-CC-DD-EE-FF}/disconnect
+   */
+  static async disconnectClient(omadaSiteId: string, clientMac: string) {
+    return OmadaClient.post(
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/disconnect`,
+      {},
+    );
+  }
+
+  /**
+   * Block a client MAC at the AP/site level (persists across reconnects).
+   * Used as a last-resort kick for clients the cron can't otherwise unseat.
+   */
+  static async blockClient(omadaSiteId: string, clientMac: string) {
+    return OmadaClient.post(
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/block`,
+      {},
+    );
+  }
+
+  /** Reverse of {@link blockClient}. */
+  static async unblockClient(omadaSiteId: string, clientMac: string) {
+    return OmadaClient.post(
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/cmd/clients/${normaliseMacHyphen(clientMac)}/unblock`,
+      {},
     );
   }
 

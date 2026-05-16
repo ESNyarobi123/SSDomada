@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
+import { RadiusService } from "@/server/services/radius.service";
+import { OmadaService } from "@/server/services/omada.service";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -117,8 +119,34 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         update: { reason },
         create: { resellerId: ctx.resellerId, mac: mac.toUpperCase(), reason },
       });
+      // Revoke RADIUS access and kick the client off Omada so the block is
+      // immediate, not just on next reconnect.
+      try {
+        await RadiusService.revokeByMac(ctx.resellerId, mac);
+      } catch (err) {
+        console.warn(`[Reseller Client PATCH] revokeByMac failed for ${mac}:`, err);
+      }
+      const omadaTargets = await prisma.portalSession.findMany({
+        where: {
+          resellerId: ctx.resellerId,
+          clientMac: mac.toUpperCase(),
+          omadaSiteId: { not: null },
+        },
+        orderBy: { updatedAt: "desc" },
+        select: { omadaSiteId: true, clientMac: true },
+        take: 3,
+      });
+      for (const t of omadaTargets) {
+        if (!t.omadaSiteId) continue;
+        try {
+          await OmadaService.deauthorizeClient(t.omadaSiteId, t.clientMac);
+          await OmadaService.disconnectClient(t.omadaSiteId, t.clientMac);
+        } catch (err) {
+          console.warn(`[Reseller Client PATCH] Omada disconnect failed mac=${mac}:`, err);
+        }
+      }
       await logResellerAction(ctx.userId, "client.blocked", "User", id, { mac, reason }, getClientIp(req));
-      return apiSuccess({ message: `MAC ${mac} blocked` });
+      return apiSuccess({ message: `MAC ${mac} blocked and disconnected` });
     }
 
     if (action === "unblock") {

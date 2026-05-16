@@ -387,13 +387,28 @@ export class RadiusService {
 
     const targets = await this.findOmadaDeauthTargets(user);
     for (const target of targets) {
+      // 1. Clear captive-portal auth state (works for OpenAPI guest auth flows).
       try {
         await OmadaService.deauthorizeClient(target.omadaSiteId, target.clientMac);
-        omadaDeauthorized++;
       } catch (err: any) {
         const message = err?.message || String(err);
         errors.push(`Omada deauthorize failed user=${user.username} site=${target.omadaSiteId}: ${message}`);
         console.warn(`[RADIUS] Omada deauthorize failed for ${user.username}:`, err);
+      }
+
+      // 2. Kick the client off the AP. CRITICAL for External Portal sessions —
+      //    without this the user keeps using their existing connection even
+      //    after `unauthorize` succeeds.
+      try {
+        await OmadaService.disconnectClient(target.omadaSiteId, target.clientMac);
+        omadaDeauthorized++;
+        console.log(
+          `[RADIUS] Disconnected expired client user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId}`,
+        );
+      } catch (err: any) {
+        const message = err?.message || String(err);
+        errors.push(`Omada disconnect failed user=${user.username} site=${target.omadaSiteId}: ${message}`);
+        console.warn(`[RADIUS] Omada disconnect failed for ${user.username}:`, err);
       }
     }
 
