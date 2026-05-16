@@ -19,6 +19,15 @@ type OmadaKickTarget = {
   portalSession: { apMac: string; ssidName: string; radioId: number } | null;
 };
 
+const DEFAULT_UNBLOCK_DELAY_MS = 5 * 60 * 1000;
+
+function parseUnblockDelayMs(raw: string | undefined): number {
+  if (!raw) return DEFAULT_UNBLOCK_DELAY_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1000) return DEFAULT_UNBLOCK_DELAY_MS;
+  return Math.min(parsed, 60 * 60 * 1000);
+}
+
 const radiusUserEnforcementSelect = {
   id: true,
   resellerId: true,
@@ -551,19 +560,32 @@ export class RadiusService {
 
   /**
    * Aggressively force a client off Omada — used both by the cron job and
-   * the stale-session sweep. We've observed that on some controller builds
-   * `/reconnect` returns `errorCode === 0` but the AP does not actually drop
-   * the association (or it drops and the client immediately re-associates
-   * because the External Portal auth-state is still active). The only
-   * reliable kick is to BLOCK the client (adds them to the AP blocklist),
-   * then UNBLOCK after a short delay so future payments can re-authorise.
+   * the stale-session sweep.
+   *
+   * IMPORTANT: Omada's External Portal v2 API has NO real deauthorisation
+   * endpoint. Re-calling `extPortal/auth` with `time=1` does NOT invalidate
+   * the existing session — Omada keeps the original auth state and the
+   * client can keep using WiFi after we kick them. Reconnect is also
+   * unreliable (returns errorCode=0 but doesn't always actually drop the
+   * association).
+   *
+   * The ONLY way to guarantee the client is kicked is to BLOCK them at the
+   * AP level. Block puts them on the AP blocklist so they cannot associate
+   * at all. We then UNBLOCK after a longer delay (default 5 min) so they
+   * can come back and pay again. If they pay BEFORE the unblock fires, the
+   * payment webhook unblocks immediately and re-authorises.
+   *
+   * The unblock delay is configurable via env `OMADA_UNBLOCK_DELAY_MS`
+   * (default 300_000 = 5 min). Increase if your Omada controller takes
+   * longer to clear stale captive-portal auth state.
    *
    * Order of operations:
    *   1. OpenAPI `unauthorize`   (clears any OpenAPI auth state)
-   *   2. External Portal deauth  (re-call extPortal/auth with time=1 to expire the portal session)
+   *   2. External Portal deauth  (best-effort, may be a no-op)
    *   3. BLOCK                   (primary kick — drops connection + prevents reassoc)
    *   4. Reconnect               (best-effort secondary kick)
-   *   5. Schedule UNBLOCK in 30s (so the next payment can authorise)
+   *   5. Schedule UNBLOCK after `OMADA_UNBLOCK_DELAY_MS` so the next
+   *      payment can authorise. Payment webhook can unblock earlier.
    */
   static async forceKickFromOmada(args: {
     omadaSiteId: string;
@@ -628,17 +650,26 @@ export class RadiusService {
     );
 
     if (block.ok) {
+      // 5. Schedule UNBLOCK after configured delay so the client can re-pay
+      //    and reconnect. The payment webhook will also call unblock as
+      //    soon as a fresh payment comes in (whichever happens first wins).
+      const unblockDelayMs = parseUnblockDelayMs(process.env.OMADA_UNBLOCK_DELAY_MS);
       console.log(
-        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`})`,
+        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`}, unblockInMs=${unblockDelayMs})`,
       );
-      // 5. Schedule UNBLOCK in 30s so the client can re-pay and reconnect.
       setTimeout(() => {
-        OmadaService.unblockClient(omadaSiteId, clientMac).catch((err) => {
-          console.warn(
-            `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
-          );
-        });
-      }, 30_000);
+        OmadaService.unblockClient(omadaSiteId, clientMac)
+          .then(() => {
+            console.log(
+              `[RADIUS] Auto-unblocked ${label} mac=${clientMac} after ${unblockDelayMs}ms`,
+            );
+          })
+          .catch((err) => {
+            console.warn(
+              `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
+            );
+          });
+      }, unblockDelayMs);
       return { kicked: true, errors };
     }
 

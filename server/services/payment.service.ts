@@ -487,6 +487,18 @@ export class PaymentService {
       Boolean(apMac) && Boolean(ssidName) && radioId !== null && Boolean(omadaSiteId);
 
     if (hasExternalPortalParams) {
+      // If this client was previously blocked (e.g. by the radius-expire
+      // cron after a previous package expired), clear the block first so
+      // Omada lets them associate again. Best-effort — fine if it fails.
+      try {
+        await OmadaService.unblockClient(omadaSiteId, opts.clientMac);
+        console.log(
+          `[Omada] Cleared prior block (if any) before re-auth MAC=${opts.clientMac} site=${omadaSiteId}`,
+        );
+      } catch (err) {
+        // Most likely the client wasn't blocked — silently ignore.
+      }
+
       try {
         const result = await OmadaService.authorizeExternalPortalClient({
           clientMac: opts.clientMac,
