@@ -4,8 +4,9 @@ import { RadiusService } from "@/server/services/radius.service";
 /**
  * POST /api/cron/radius-expire
  * 
- * Cron job endpoint: Expire stale RADIUS credentials.
- * Removes radcheck/radreply for users past their expiresAt.
+ * Cron job endpoint: Enforce paid WiFi access limits.
+ * Removes radcheck/radreply and asks Omada to unauthorize clients when
+ * their package time or data quota is exhausted.
  * Should be called every minute via cron or Vercel Cron.
  * 
  * Protected by CRON_SECRET header.

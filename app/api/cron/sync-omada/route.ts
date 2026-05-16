@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { OmadaService } from "@/server/services/omada.service";
+import { RadiusService } from "@/server/services/radius.service";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,9 @@ export async function GET(req: NextRequest) {
     devicesOffline: 0,
     expiredSessions: 0,
     expiredRadius: 0,
+    dataLimited: 0,
+    omadaDeauthorized: 0,
+    expiredSubscriptions: 0,
     healedSites: 0,
     errors: [] as string[],
   };
@@ -96,19 +100,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 3. Expire RADIUS users past their expiresAt
-    const expiredR = await prisma.radiusUser.updateMany({
-      where: { isActive: true, expiresAt: { lt: new Date() } },
-      data: { isActive: false },
-    });
-    stats.expiredRadius = expiredR.count;
-
-    // 4. Expire portal sessions past their expiresAt
-    const expiredP = await prisma.portalSession.updateMany({
-      where: { status: "AUTHORIZED", expiresAt: { lt: new Date() } },
-      data: { status: "EXPIRED" },
-    });
-    stats.expiredSessions = expiredP.count;
+    // 3. Enforce paid-access limits. This removes FreeRADIUS rows and asks
+    // Omada to unauthorize expired/quota-exceeded clients.
+    const expiry = await RadiusService.expireStaleCredentials();
+    stats.expiredRadius = expiry.expired;
+    stats.dataLimited = expiry.dataLimited;
+    stats.omadaDeauthorized = expiry.omadaDeauthorized;
+    stats.expiredSubscriptions = expiry.expiredSubscriptions;
+    stats.expiredSessions = expiry.expiredPortalSessions;
+    stats.errors.push(...expiry.errors);
 
     return NextResponse.json({
       success: true,

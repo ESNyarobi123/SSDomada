@@ -28,6 +28,8 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    const now = new Date();
+
     // Sales stats per package
     const enriched = await Promise.all(
       packages.map(async (pkg) => {
@@ -38,7 +40,7 @@ export async function GET(req: NextRequest) {
             _count: true,
           }),
           prisma.subscription.count({
-            where: { packageId: pkg.id, status: "ACTIVE" },
+            where: { packageId: pkg.id, status: "ACTIVE", expiresAt: { gt: now } },
           }),
         ]);
 

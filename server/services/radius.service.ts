@@ -1,5 +1,26 @@
 import { prisma } from "@/server/lib/prisma";
+import { OmadaService } from "@/server/services/omada.service";
 import crypto from "crypto";
+
+type RadiusUserForEnforcement = {
+  id: string;
+  resellerId: string;
+  subscriptionId: string | null;
+  username: string;
+  macAddress: string | null;
+  dataLimitBytes: bigint | null;
+};
+
+type AccessLimitReason = "expired" | "data_limit";
+
+const radiusUserEnforcementSelect = {
+  id: true,
+  resellerId: true,
+  subscriptionId: true,
+  username: true,
+  macAddress: true,
+  dataLimitBytes: true,
+} as const;
 
 /**
  * RADIUS Service — Manages FreeRADIUS SQL records.
@@ -131,12 +152,28 @@ export class RadiusService {
         data: { isActive: false },
       });
 
-      const radiusUser = await tx.radiusUser.create({
-        data: {
+      const radiusUser = await tx.radiusUser.upsert({
+        where: { username },
+        create: {
           resellerId,
           userId,
           subscriptionId,
           username,
+          password,
+          macAddress: normalizedMac,
+          isActive: true,
+          expiresAt,
+          sessionTimeout: sessionTimeoutSeconds,
+          dataLimitBytes,
+          bandwidthUp: bandwidthUpBps,
+          bandwidthDown: bandwidthDownBps,
+          maxSessions,
+          authMethod,
+        },
+        update: {
+          resellerId,
+          userId,
+          subscriptionId,
           password,
           macAddress: normalizedMac,
           isActive: true,
@@ -195,24 +232,254 @@ export class RadiusService {
   // ============================================================
 
   /**
-   * Expire all RADIUS credentials that have passed their expiresAt.
-   * Should be called by a cron job every minute.
+   * Expire all RADIUS credentials that have passed their expiresAt, enforce
+   * data quotas, and actively ask Omada to remove clients from its authorised
+   * state. Should be called by a cron job every minute.
    */
   static async expireStaleCredentials() {
     const now = new Date();
 
-    const expired = await prisma.radiusUser.findMany({
+    const activeExpired = await prisma.radiusUser.findMany({
       where: { isActive: true, expiresAt: { lte: now } },
-      select: { id: true, username: true },
+      select: radiusUserEnforcementSelect,
     });
 
-    let count = 0;
-    for (const ru of expired) {
-      await this.revokeAccess(ru.username);
-      count++;
+    // Older sync code only set RadiusUser.isActive=false and could leave
+    // radcheck/radreply rows behind. Include any expired RadiusUser that still
+    // has RADIUS rows so the cleanup is self-healing after deploy.
+    const radiusRowUsers = await prisma.radcheck.findMany({
+      distinct: ["username"],
+      select: { username: true },
+      take: 5000,
+    });
+    const rowBackedUsernames = radiusRowUsers.map((r) => r.username);
+    const inactiveExpiredWithRows = rowBackedUsernames.length
+      ? await prisma.radiusUser.findMany({
+          where: {
+            isActive: false,
+            expiresAt: { lte: now },
+            username: { in: rowBackedUsernames },
+          },
+          select: radiusUserEnforcementSelect,
+        })
+      : [];
+
+    const quotaExceeded = await this.findDataLimitExceededUsers(now);
+
+    const usersToRevoke = new Map<
+      string,
+      RadiusUserForEnforcement & { reason: AccessLimitReason }
+    >();
+    for (const user of [...activeExpired, ...inactiveExpiredWithRows]) {
+      usersToRevoke.set(user.id, { ...user, reason: "expired" });
+    }
+    for (const user of quotaExceeded) {
+      if (!usersToRevoke.has(user.id)) {
+        usersToRevoke.set(user.id, { ...user, reason: "data_limit" });
+      }
     }
 
-    return { expired: count };
+    let expired = 0;
+    let dataLimited = 0;
+    let omadaDeauthorized = 0;
+    const errors: string[] = [];
+
+    for (const user of usersToRevoke.values()) {
+      const result = await this.revokeRadiusUserAndDisconnect(user, now);
+      if (!result.revoked) continue;
+      omadaDeauthorized += result.omadaDeauthorized;
+      errors.push(...result.errors);
+      if (user.reason === "data_limit") dataLimited++;
+      else expired++;
+    }
+
+    const [expiredSubscriptions, expiredPortalSessions] = await Promise.all([
+      prisma.subscription.updateMany({
+        where: { status: "ACTIVE", expiresAt: { lte: now } },
+        data: { status: "EXPIRED" },
+      }),
+      prisma.portalSession.updateMany({
+        where: {
+          status: { in: ["AUTHORIZED", "RADIUS_AUTHORIZED", "OMADA_AUTH_FAILED"] },
+          expiresAt: { lte: now },
+        },
+        data: { status: "EXPIRED" },
+      }),
+    ]);
+
+    return {
+      expired,
+      dataLimited,
+      omadaDeauthorized,
+      expiredSubscriptions: expiredSubscriptions.count,
+      expiredPortalSessions: expiredPortalSessions.count,
+      errors: errors.slice(0, 20),
+    };
+  }
+
+  private static async findDataLimitExceededUsers(now: Date): Promise<RadiusUserForEnforcement[]> {
+    const users = await prisma.radiusUser.findMany({
+      where: {
+        isActive: true,
+        expiresAt: { gt: now },
+        dataLimitBytes: { not: null },
+      },
+      select: radiusUserEnforcementSelect,
+      take: 1000,
+    });
+
+    const exceeded: RadiusUserForEnforcement[] = [];
+
+    for (const user of users) {
+      if (!user.dataLimitBytes) continue;
+
+      const usage = await this.getTotalUsageBytes(user.username);
+      if (user.subscriptionId) {
+        await prisma.subscription.update({
+          where: { id: user.subscriptionId },
+          data: { dataUsedMb: bytesToMegabytes(usage) },
+        }).catch((err) => {
+          console.warn(`[RADIUS] Failed to update data usage for subscription ${user.subscriptionId}:`, err);
+        });
+      }
+
+      if (usage >= user.dataLimitBytes) {
+        exceeded.push(user);
+      }
+    }
+
+    return exceeded;
+  }
+
+  private static async revokeRadiusUserAndDisconnect(
+    user: RadiusUserForEnforcement & { reason: AccessLimitReason },
+    now: Date,
+  ) {
+    const errors: string[] = [];
+    let omadaDeauthorized = 0;
+
+    const freshUser = await prisma.radiusUser.findUnique({
+      where: { id: user.id },
+      select: {
+        username: true,
+        isActive: true,
+        expiresAt: true,
+        dataLimitBytes: true,
+      },
+    });
+    if (!freshUser || freshUser.username !== user.username) {
+      return { revoked: false, omadaDeauthorized, errors };
+    }
+
+    if (user.reason === "expired" && freshUser.expiresAt > now) {
+      return { revoked: false, omadaDeauthorized, errors };
+    }
+
+    if (user.reason === "data_limit") {
+      if (!freshUser.isActive || !freshUser.dataLimitBytes) {
+        return { revoked: false, omadaDeauthorized, errors };
+      }
+      const usage = await this.getTotalUsageBytes(user.username);
+      if (usage < freshUser.dataLimitBytes) {
+        return { revoked: false, omadaDeauthorized, errors };
+      }
+    }
+
+    const targets = await this.findOmadaDeauthTargets(user);
+    for (const target of targets) {
+      try {
+        await OmadaService.deauthorizeClient(target.omadaSiteId, target.clientMac);
+        omadaDeauthorized++;
+      } catch (err: any) {
+        const message = err?.message || String(err);
+        errors.push(`Omada deauthorize failed user=${user.username} site=${target.omadaSiteId}: ${message}`);
+        console.warn(`[RADIUS] Omada deauthorize failed for ${user.username}:`, err);
+      }
+    }
+
+    await this.revokeAccess(user.username);
+
+    if (user.subscriptionId) {
+      await prisma.subscription.updateMany({
+        where: { id: user.subscriptionId },
+        data: { status: "EXPIRED" },
+      });
+    }
+
+    const portalWhere: any = {
+      resellerId: user.resellerId,
+      status: { in: ["AUTHORIZED", "RADIUS_AUTHORIZED", "OMADA_AUTH_FAILED", "PAYING"] },
+      OR: [{ radiusUserId: user.id }],
+    };
+    if (user.macAddress) {
+      portalWhere.OR.push({ clientMac: user.macAddress });
+    }
+    if (user.reason === "expired") {
+      portalWhere.expiresAt = { lte: now };
+    }
+
+    await prisma.portalSession.updateMany({
+      where: portalWhere,
+      data: { status: "EXPIRED" },
+    });
+
+    console.log(
+      `[RADIUS] Revoked ${user.username} reason=${user.reason} omadaDeauthorized=${omadaDeauthorized}`,
+    );
+
+    return { revoked: true, omadaDeauthorized, errors };
+  }
+
+  private static async findOmadaDeauthTargets(user: RadiusUserForEnforcement) {
+    if (!user.macAddress) return [];
+
+    const sessions = await prisma.portalSession.findMany({
+      where: {
+        resellerId: user.resellerId,
+        omadaSiteId: { not: null },
+        OR: [{ radiusUserId: user.id }, { clientMac: user.macAddress }],
+      },
+      orderBy: { updatedAt: "desc" },
+      select: { omadaSiteId: true, clientMac: true },
+      take: 5,
+    });
+
+    const targets = new Map<string, { omadaSiteId: string; clientMac: string }>();
+    for (const session of sessions) {
+      if (!session.omadaSiteId) continue;
+      targets.set(`${session.omadaSiteId}:${session.clientMac}`, {
+        omadaSiteId: session.omadaSiteId,
+        clientMac: session.clientMac,
+      });
+    }
+
+    if (targets.size === 0) {
+      const site = await prisma.site.findFirst({
+        where: { resellerId: user.resellerId, omadaSiteId: { not: null }, isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { omadaSiteId: true },
+      });
+      if (site?.omadaSiteId) {
+        targets.set(`${site.omadaSiteId}:${user.macAddress}`, {
+          omadaSiteId: site.omadaSiteId,
+          clientMac: user.macAddress,
+        });
+      }
+    }
+
+    return Array.from(targets.values());
+  }
+
+  private static async getTotalUsageBytes(username: string): Promise<bigint> {
+    const usage = await prisma.radacct.aggregate({
+      where: { username },
+      _sum: {
+        acctinputoctets: true,
+        acctoutputoctets: true,
+      },
+    });
+
+    return (usage._sum.acctinputoctets || BigInt(0)) + (usage._sum.acctoutputoctets || BigInt(0));
   }
 
   // ============================================================
@@ -361,4 +628,8 @@ function formatRadiusDate(date: Date): string {
   const min = String(date.getMinutes()).padStart(2, "0");
   const s = String(date.getSeconds()).padStart(2, "0");
   return `${m} ${d} ${y} ${h}:${min}:${s}`;
+}
+
+function bytesToMegabytes(bytes: bigint): number {
+  return Number(bytes / BigInt(1024)) / 1024;
 }
