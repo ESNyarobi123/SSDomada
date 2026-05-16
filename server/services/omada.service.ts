@@ -409,99 +409,34 @@ export class OmadaService {
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
     const mac = normaliseMacHyphen(clientMac);
 
-    // === Strategy ===
+    // The real "Unauthorize" — verified via reverse-engineering Omada v5.15+:
     //
-    // 1. Probe Open API "cancelAuth"-style paths (Bearer auth, /openapi/v1)
-    //    These are documented under the "Authorized Client" Swagger group
-    //    as `cancelAuthClient`. Exact path varies by firmware so we try
-    //    several candidates.
+    //   POST /openapi/v1/{omadacId}/sites/{siteId}/hotspot/clients/{mac}/unauth
     //
-    // 2. Fall back to the cookie-based `/api/v2/.../unauthorize` paths
-    //    used by the Omada UI's "Unauthorize" button.
+    // Effect: client's `authStatus` resets from 2 (AUTHORIZED) → undefined,
+    // wireless association stays up, AP resumes captive-portal interception
+    // on the next HTTP request. This is exactly what the Omada UI's
+    // "Unauthorize" button does.
     //
-    // 3. Final fallback: Open API `DELETE /clients/{mac}`. This returns
-    //    `errorCode=0` on most builds but is often a no-op — only useful
-    //    to clean up the controller's client row.
-    //
-    // Order matters: we want the action that ACTUALLY revokes captive
-    // portal access (so the next packet from the phone is intercepted).
-    // The cookie-based UI button does this; the OpenAPI DELETE does not.
-    const cancelPaths = [
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/clients/${mac}/cancelAuth`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/clients/${mac}/cancel-auth`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/authorized-clients/${mac}/cancel`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/authorized-clients/${mac}`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/cancelAuth`,
-      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/extPortal/deauth`,
-    ];
-
-    for (const path of cancelPaths) {
-      try {
-        // Some "cancel" endpoints want the MAC in the body (extPortal/deauth);
-        // others use the URL only. We post `{ clientMac, mac, site }` so all
-        // shapes are covered — extra fields are ignored by the controller.
-        const body = { clientMac: mac, mac, site: omadaSiteId };
-        const isDeleteShape = /\/authorized-clients\/[^/]+$/.test(path);
-        const res = isDeleteShape
-          ? ((await OmadaClient.delete<Record<string, unknown>>(path)) as Record<string, unknown>)
-          : ((await OmadaClient.post<Record<string, unknown>>(path, body)) as Record<string, unknown>);
-        const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
-        const msg = typeof res.msg === "string" ? res.msg : undefined;
-        console.log(
-          `[Omada] unauthorize(openapi-cancel) mac=${mac} site=${omadaSiteId} method=${isDeleteShape ? "DELETE" : "POST"} path=${path} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
-        );
-        if (ec === 0) {
-          return { ok: true, path, errorCode: ec, msg };
-        }
-        // Real (non-404) failure → keep probing other candidates anyway,
-        // since these are best-guess endpoints. Stop only on auth errors.
-        if (ec === -1 || ec === 401) {
-          return { ok: false, path, errorCode: ec, msg };
-        }
-      } catch (err: any) {
-        const message = err?.message || String(err);
-        console.warn(`[Omada] unauthorize(openapi-cancel) threw mac=${mac} path=${path}: ${message}`);
-      }
-    }
-
-    // None of the OpenAPI cancel candidates worked → try cookie-based UI.
-    const viaUi = await OmadaPortalClient.unauthoriseClient({
-      omadaSiteId,
-      clientMac: mac,
-    });
-    if (viaUi.ok) {
-      console.log(
-        `[Omada] unauthorize(UI) mac=${mac} site=${omadaSiteId} via=${viaUi.path} errorCode=${viaUi.errorCode ?? "?"} msg=${viaUi.message ?? "?"}`,
-      );
-      return { ok: true, path: viaUi.path, errorCode: viaUi.errorCode, msg: viaUi.message };
-    }
-    console.warn(
-      `[Omada] unauthorize(UI) failed mac=${mac} site=${omadaSiteId} via=${viaUi.path} errorCode=${viaUi.errorCode ?? "?"} msg=${viaUi.message ?? "?"} — falling back to Open API DELETE`,
-    );
-
-    // Last resort: the documented DELETE. Often a no-op on captive-portal
-    // state but at least removes the client row from the controller.
-    const deletePath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}`;
+    // The previously-tried `DELETE /clients/{mac}` is "Forget" — it removes
+    // the client row but the AP keeps allowing traffic until the next
+    // re-association, so the phone never gets redirected to the portal.
+    const unauthPath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/clients/${mac}/unauth`;
     try {
-      const res = (await OmadaClient.delete<Record<string, unknown>>(deletePath)) as Record<string, unknown>;
+      const res = (await OmadaClient.post<Record<string, unknown>>(unauthPath, {})) as Record<string, unknown>;
       const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
       const msg = typeof res.msg === "string" ? res.msg : undefined;
       console.log(
-        `[Omada] unauthorize(DELETE-fallback) mac=${mac} site=${omadaSiteId} path=${deletePath} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
+        `[Omada] unauthorize mac=${mac} site=${omadaSiteId} path=${unauthPath} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
       );
       if (ec === 0) {
-        return { ok: true, path: deletePath, errorCode: ec, msg };
+        return { ok: true, path: unauthPath, errorCode: ec, msg };
       }
-      return { ok: false, path: deletePath, errorCode: ec, msg };
+      return { ok: false, path: unauthPath, errorCode: ec, msg };
     } catch (err: any) {
       const message = err?.message || String(err);
-      console.warn(`[Omada] unauthorize(DELETE-fallback) threw mac=${mac} path=${deletePath}: ${message}`);
-      return {
-        ok: false,
-        path: viaUi.path,
-        errorCode: viaUi.errorCode,
-        msg: viaUi.message ?? message,
-      };
+      console.warn(`[Omada] unauthorize threw mac=${mac} path=${unauthPath}: ${message}`);
+      return { ok: false, path: unauthPath, msg: message };
     }
   }
 

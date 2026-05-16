@@ -615,10 +615,11 @@ export class RadiusService {
       }
     }
 
-    // 3. DELETE the client from Omada's authorised list — the "Unauthorize"
-    //    button on the Omada controller UI. After this, when the client
-    //    re-associates and tries to use the network, the AP will treat them
-    //    as a fresh guest and redirect them to the captive portal.
+    // 3. POST /hotspot/clients/{mac}/unauth — the controller-side equivalent
+    //    of the Omada UI's "Unauthorize" button (verified by reverse-eng).
+    //    Resets authStatus 2 → undefined, keeps the wireless association,
+    //    so the AP resumes captive-portal interception on the NEXT HTTP
+    //    request from the phone — exactly what we want.
     const unauth = await OmadaService.deauthorizeClient(omadaSiteId, clientMac).catch((err: any) => ({
       ok: false as const,
       path: "(threw)" as const,
