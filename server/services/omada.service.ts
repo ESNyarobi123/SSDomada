@@ -409,36 +409,53 @@ export class OmadaService {
   ): Promise<{ ok: boolean; path: string; errorCode?: number; msg?: string }> {
     const mac = normaliseMacHyphen(clientMac);
 
+    // === Strategy ===
+    // The Omada UI "Unauthorize" button is the only thing that *actually*
+    // forces the captive portal to intercept the client again. It uses
+    // cookie-based `/api/v2/...` paths with the Hotspot Operator session.
+    //
+    // The Open API `DELETE /openapi/v1/.../clients/{mac}` happily returns
+    // `errorCode=0` but, on most controller builds, does NOT clear the
+    // wireless authorisation state — the client just stays online.
+    //
+    // So we try the cookie-based UI route FIRST. Only if every UI-style
+    // path 404s (controller too new/old) do we fall back to the Open API
+    // DELETE, accepting that it might be a no-op but at least removes the
+    // client row from the controller's database.
+    const viaUi = await OmadaPortalClient.unauthoriseClient({
+      omadaSiteId,
+      clientMac: mac,
+    });
+    if (viaUi.ok) {
+      console.log(
+        `[Omada] unauthorize(UI) mac=${mac} site=${omadaSiteId} via=${viaUi.path} errorCode=${viaUi.errorCode ?? "?"} msg=${viaUi.message ?? "?"}`,
+      );
+      return { ok: true, path: viaUi.path, errorCode: viaUi.errorCode, msg: viaUi.message };
+    }
+    console.warn(
+      `[Omada] unauthorize(UI) failed mac=${mac} site=${omadaSiteId} via=${viaUi.path} errorCode=${viaUi.errorCode ?? "?"} msg=${viaUi.message ?? "?"} — falling back to Open API DELETE`,
+    );
+
     const deletePath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}`;
     try {
       const res = (await OmadaClient.delete<Record<string, unknown>>(deletePath)) as Record<string, unknown>;
       const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
       const msg = typeof res.msg === "string" ? res.msg : undefined;
       console.log(
-        `[Omada] unauthorize(DELETE) mac=${mac} site=${omadaSiteId} path=${deletePath} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
+        `[Omada] unauthorize(DELETE-fallback) mac=${mac} site=${omadaSiteId} path=${deletePath} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
       );
       if (ec === 0) {
         return { ok: true, path: deletePath, errorCode: ec, msg };
       }
-      // Real failure — surface it.
       return { ok: false, path: deletePath, errorCode: ec, msg };
     } catch (err: any) {
       const message = err?.message || String(err);
-      console.warn(`[Omada] unauthorize(DELETE) threw mac=${mac} path=${deletePath}: ${message}`);
-
-      // Fallback: legacy hotspot-session unauthorize (older controllers).
-      const viaLegacy = await OmadaPortalClient.unauthoriseClient({
-        omadaSiteId,
-        clientMac: mac,
-      });
-      if (viaLegacy.ok) {
-        return { ok: true, path: viaLegacy.path, errorCode: viaLegacy.errorCode, msg: viaLegacy.message };
-      }
+      console.warn(`[Omada] unauthorize(DELETE-fallback) threw mac=${mac} path=${deletePath}: ${message}`);
       return {
         ok: false,
-        path: viaLegacy.path,
-        errorCode: viaLegacy.errorCode,
-        msg: viaLegacy.message ?? message,
+        path: viaUi.path,
+        errorCode: viaUi.errorCode,
+        msg: viaUi.message ?? message,
       };
     }
   }

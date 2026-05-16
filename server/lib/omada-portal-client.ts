@@ -119,17 +119,24 @@ export class OmadaPortalClient {
    * Call the legacy `unauthorize` endpoint the Omada controller's web UI
    * uses — i.e. the "Unauthorize" button in Site → Clients. This is the
    * ONLY thing that actually clears an active External Portal v2 auth
-   * state, because the documented Open API does not expose an
-   * unauthorize endpoint for clients.
+   * state and forces the captive portal to intercept the next request,
+   * because the documented Open API `DELETE` returns `errorCode=0` but
+   * does NOT actually clear the wireless association.
    *
    * Uses the Hotspot Operator session (TPOMADA_SESSIONID cookie +
    * CSRF token) that we already maintain for extPortal/auth.
    *
-   * Tries a small list of historically-documented paths so this keeps
-   * working across controller versions:
-   *   - /api/v2/sites/{siteId}/cmd/clients/{mac}/unauthorize
-   *   - /api/v2/cmd/sites/{siteId}/clients/{mac}/unauthorize
-   *   - /api/v2/hotspot/cmd/sites/{siteId}/clients/{mac}/unauthorize
+   * The exact path varies wildly between Omada controller versions and
+   * even between firmware patches on the same major version. We try a
+   * comprehensive list of candidate paths (POST + DELETE + GET) using
+   * different MAC encodings and body shapes. Whichever one returns
+   * `errorCode === 0` is treated as the working endpoint.
+   *
+   * If `OMADA_UI_UNAUTHORIZE_PATH` is set, we ONLY try that path — this
+   * lets operators pin the working endpoint once they find it via browser
+   * DevTools (Network tab while clicking the UI button). Use the special
+   * token `{site}` for the site ID and `{mac}` for the client MAC.
+   * Example: `OMADA_UI_UNAUTHORIZE_PATH=/api/v2/sites/{site}/cmd/clients/{mac}/unauthorize`
    */
   static async unauthoriseClient(opts: {
     omadaSiteId: string;
@@ -143,35 +150,91 @@ export class OmadaPortalClient {
       };
     }
 
+    // Build a comprehensive list of candidate paths. Some controllers use
+    // `/cmd/` before the resource, some after. Some accept colon-separated
+    // MACs, some hyphenated. Some routes are nested under `/hotspot/`,
+    // `/users/portal`, `/insight`, or just `/clients`. We probe broadly.
+    const site = opts.omadaSiteId;
+    const macHyphen = normaliseMac(opts.clientMac, "hyphen");
+    const macColon = normaliseMac(opts.clientMac, "colon");
+    const macLower = macHyphen.toLowerCase();
+
+    const macVariants = Array.from(new Set([macHyphen, macColon, macLower]));
+
+    // Operator override: if the user has pinned a working path via env,
+    // try only that one. Tokens: {site} {mac}
+    const overrideTemplate = (process.env.OMADA_UI_UNAUTHORIZE_PATH || "").trim();
+
+    type Candidate = {
+      path: string;
+      method: "POST" | "DELETE" | "PUT";
+      body?: Record<string, unknown> | null;
+    };
+
+    const candidates: Candidate[] = [];
+
+    if (overrideTemplate) {
+      for (const mac of macVariants) {
+        candidates.push({
+          path: overrideTemplate.replace(/\{site\}/g, site).replace(/\{mac\}/g, mac),
+          method: (process.env.OMADA_UI_UNAUTHORIZE_METHOD as "POST" | "DELETE") || "POST",
+          body: null,
+        });
+      }
+    } else {
+      for (const mac of macVariants) {
+        // === Captive-portal / "Unauthorize" UI button variants ===
+        // The exact path the UI uses depends on controller firmware. We
+        // try every shape that's been documented in the wild.
+        candidates.push(
+          { path: `/api/v2/sites/${site}/cmd/clients/${mac}/unauthorize`, method: "POST", body: {} },
+          { path: `/api/v2/sites/${site}/hotspot/cmd/clients/${mac}/unauthorize`, method: "POST", body: {} },
+          { path: `/api/v2/hotspot/cmd/sites/${site}/clients/${mac}/unauthorize`, method: "POST", body: {} },
+          { path: `/api/v2/cmd/sites/${site}/clients/${mac}/unauthorize`, method: "POST", body: {} },
+          // newer "cancel-auth" / "cancelAuthClient" naming (Omada v5.13+)
+          { path: `/api/v2/sites/${site}/cmd/clients/${mac}/cancel-auth`, method: "POST", body: {} },
+          { path: `/api/v2/sites/${site}/hotspot/cmd/clients/${mac}/cancel-auth`, method: "POST", body: {} },
+          { path: `/api/v2/sites/${site}/cmd/clients/${mac}/cancelAuth`, method: "POST", body: {} },
+          // "disconnect from portal" naming
+          { path: `/api/v2/sites/${site}/cmd/clients/${mac}/portal-logout`, method: "POST", body: {} },
+          { path: `/api/v2/sites/${site}/cmd/clients/${mac}/logout`, method: "POST", body: {} },
+          // DELETE-style (mirrors the Open API DELETE but via cookie auth)
+          { path: `/api/v2/sites/${site}/clients/${mac}`, method: "DELETE" },
+          { path: `/api/v2/sites/${site}/hotspot/clients/${mac}`, method: "DELETE" },
+          // "authorized-clients" resource (matches Swagger group name)
+          { path: `/api/v2/sites/${site}/hotspot/authorized-clients/${mac}`, method: "DELETE" },
+          { path: `/api/v2/sites/${site}/insight/authorized-clients/${mac}`, method: "DELETE" },
+        );
+      }
+    }
+
     const tryOnce = async (
       creds: CredentialBundle,
     ): Promise<{ ok: boolean; path: string; errorCode?: number; message?: string; httpStatus?: number }> => {
       const base = OmadaPortalClient.controllerBase();
-      const paths = [
-        `/api/v2/sites/${opts.omadaSiteId}/cmd/clients/${opts.clientMac}/unauthorize`,
-        `/api/v2/cmd/sites/${opts.omadaSiteId}/clients/${opts.clientMac}/unauthorize`,
-        `/api/v2/hotspot/cmd/sites/${opts.omadaSiteId}/clients/${opts.clientMac}/unauthorize`,
-      ];
 
       let last: { ok: boolean; path: string; errorCode?: number; message?: string; httpStatus?: number } = {
         ok: false,
-        path: paths[paths.length - 1],
+        path: candidates[candidates.length - 1]?.path ?? "(no candidates)",
         message: "no candidate path responded",
       };
 
-      for (const path of paths) {
-        const url = `${base}${path}`;
+      for (const candidate of candidates) {
+        const url = `${base}${candidate.path}`;
         try {
-          const res = await fetchSafe(url, {
-            method: "POST",
+          const init: RequestInit = {
+            method: candidate.method,
             headers: {
               "Content-Type": "application/json",
               Accept: "application/json",
               Cookie: creds.cookie,
               "Csrf-Token": creds.token,
             },
-            body: JSON.stringify({}),
-          });
+          };
+          if (candidate.body !== undefined && candidate.body !== null) {
+            init.body = JSON.stringify(candidate.body);
+          }
+          const res = await fetchSafe(url, init);
 
           let parsed: any = null;
           try {
@@ -183,30 +246,50 @@ export class OmadaPortalClient {
           const msg = typeof parsed?.msg === "string" ? parsed.msg : undefined;
 
           console.log(
-            `[OmadaPortal] unauthorise path=${path} status=${res.status} errorCode=${errorCode ?? "?"} msg=${msg ?? "?"}`,
+            `[OmadaPortal] unauthorise try method=${candidate.method} path=${candidate.path} status=${res.status} errorCode=${errorCode ?? "?"} msg=${msg ?? "?"}`,
           );
 
           if (errorCode === 0) {
-            return { ok: true, path, errorCode, message: msg, httpStatus: res.status };
+            return {
+              ok: true,
+              path: `${candidate.method} ${candidate.path}`,
+              errorCode,
+              message: msg,
+              httpStatus: res.status,
+            };
           }
 
-          last = { ok: false, path, errorCode, message: msg ?? `HTTP ${res.status}`, httpStatus: res.status };
+          last = {
+            ok: false,
+            path: `${candidate.method} ${candidate.path}`,
+            errorCode,
+            message: msg ?? `HTTP ${res.status}`,
+            httpStatus: res.status,
+          };
 
-          // 404 / "path not found" → try next candidate. Anything else is a real
-          // failure (auth, permission, mac wrong) — bail out so logs are clean.
+          // 404 / path-not-found / invalid-url → keep probing. Auth errors
+          // (-1, 401) bubble up to the caller so we can refresh creds.
           const notFound =
             res.status === 404 ||
             errorCode === 404 ||
             errorCode === -44112 ||
+            errorCode === -1600 ||
             errorCode === undefined ||
-            (typeof msg === "string" && /not\s*found|invalid\s*url|404/i.test(msg));
+            (typeof msg === "string" && /not\s*found|invalid\s*url|404|unsupported/i.test(msg));
+          const authError =
+            errorCode === -1 || errorCode === 401 || res.status === 401 || res.status === 403;
+          if (authError) return last;
           if (!notFound) {
-            return last;
+            // Other real failure (mac wrong, permission etc.) — keep trying
+            // alternates anyway in case the next candidate succeeds.
+            continue;
           }
         } catch (err: any) {
           const message = err?.message || String(err);
-          console.warn(`[OmadaPortal] unauthorise threw path=${path}: ${message}`);
-          last = { ok: false, path, message };
+          console.warn(
+            `[OmadaPortal] unauthorise threw method=${candidate.method} path=${candidate.path}: ${message}`,
+          );
+          last = { ok: false, path: `${candidate.method} ${candidate.path}`, message };
         }
       }
       return last;
@@ -389,4 +472,11 @@ function parseSessionCookie(setCookieHeader: string): string | null {
     setCookieHeader.match(/TPOMADA_SESSIONID=[^;]+/) ||
     setCookieHeader.match(/TPEAP_SESSIONID=[^;]+/);
   return match ? match[0] : null;
+}
+
+/** Normalise a MAC to either hyphen (AA-BB-CC) or colon (AA:BB:CC) form. */
+function normaliseMac(mac: string, sep: "hyphen" | "colon"): string {
+  const hex = (mac || "").replace(/[:-]/g, "").toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(hex)) return mac.trim();
+  return hex.match(/.{2}/g)!.join(sep === "hyphen" ? "-" : ":");
 }
