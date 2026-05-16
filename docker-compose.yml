@@ -89,6 +89,9 @@ services:
       NODE_ENV: production
     ports:  
       - "3000:3000"
+    volumes:
+      # Captive portal logo/bg uploads — persist across container rebuilds (DB stores URLs only).
+      - captive_uploads:/app/public/uploads
     networks:
       - ssdomada-net
 
@@ -99,3 +102,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  captive_uploads:

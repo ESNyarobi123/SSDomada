@@ -253,7 +253,7 @@ export default function ResellerDashboardPage() {
         </div>
       </div>
 
-      {/* ── Wi‑Fi catalog & subscription pulse (same data surface as super-admin / landing) ── */}
+      {/* ── Wi‑Fi catalog & subscriptions ── */}
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-6">
           <div className="flex items-center justify-between mb-4">
@@ -276,7 +276,7 @@ export default function ResellerDashboardPage() {
             </div>
           </div>
           <p className="text-xs text-onyx-500">
-            Packages here power your captive portal and public <code className="text-gold/90">/portal/[brand]</code> pricing — they sync from the same catalog super-admins can curate.
+            Plans you sell on your WiFi login page. Manage prices and duration under Packages.
           </p>
         </div>
         <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-6">
@@ -372,7 +372,7 @@ export default function ResellerDashboardPage() {
           {revenueTrend.length > 0 && (
             <ChartPanel
               title="Daily gross revenue"
-              subtitle="Last 7 days from your live analytics feed (completed sales)."
+              subtitle="Completed sales over the last 7 days."
             >
               <Histogram items={revenueTrend} barHeightPx={112} />
             </ChartPanel>
@@ -380,7 +380,7 @@ export default function ResellerDashboardPage() {
 
           <ChartPanel
             title="Access point posture"
-            subtitle="Online vs offline vs other states (derived from your dashboard totals)."
+            subtitle="How many access points are online right now."
           >
             <StackedStrip
               segments={[
@@ -392,7 +392,7 @@ export default function ResellerDashboardPage() {
           </ChartPanel>
         </div>
 
-        <ChartPanel title="Top packages" subtitle="Active subscriptions per package (from your dashboard ranking).">
+        <ChartPanel title="Top packages" subtitle="Most popular plans by active subscribers.">
           {d.popularPackages.length === 0 ? (
             <p className="text-sm text-onyx-500">No packages yet.</p>
           ) : (

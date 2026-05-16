@@ -232,7 +232,7 @@ export default function ResellerSettingsPage() {
       {/* ── Header ── */}
       <div>
         <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Settings</h1>
-        <p className="text-onyx-400 mt-1">Security, alerts, subscription status, and API reference.</p>
+        <p className="text-onyx-400 mt-1">Password, alerts, and your SSDomada platform subscription.</p>
       </div>
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
@@ -244,7 +244,7 @@ export default function ResellerSettingsPage() {
           <div className="w-8 h-8 rounded-lg bg-gold-10 flex items-center justify-center">
             <Zap className="w-4 h-4 text-gold" />
           </div>
-          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Platform plan & API</h2>
+          <h2 className="text-sm font-bold text-white uppercase tracking-wider">Platform subscription</h2>
         </div>
         <div className="grid sm:grid-cols-3 gap-3">
           <div className="rounded-xl border border-white/[0.08] bg-white/[0.04] p-3">
@@ -314,16 +314,17 @@ export default function ResellerSettingsPage() {
           )}
           {currentPlatformSub?.cancelAtPeriodEnd && <p className="text-xs text-amber-200">Cancellation is scheduled at period end.</p>}
         </div>
-        <p className="text-xs text-onyx-500">
-          API access:{" "}
-          {canUseApi ? (
-            <a className="text-gold hover:underline font-mono" href="/api/v1/reseller/docs" target="_blank" rel="noreferrer">
-              /api/v1/reseller/docs
-            </a>
-          ) : (
-            <span className="text-onyx-400">not included in this plan</span>
-          )}
-        </p>
+        {canUseApi ? (
+          <p className="text-xs text-onyx-500">
+            Your plan includes{" "}
+            <a className="text-gold hover:underline font-semibold" href="/api/v1/reseller/docs" target="_blank" rel="noreferrer">
+              developer API documentation
+            </a>{" "}
+            (for integrations and automation).
+          </p>
+        ) : (
+          <p className="text-xs text-onyx-500">Developer API access is not included in your current plan. Upgrade to connect external systems.</p>
+        )}
       </section>
 
       {/* ── Security ── */}

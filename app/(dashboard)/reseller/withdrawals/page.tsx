@@ -163,7 +163,7 @@ export default function ResellerWithdrawalsPage() {
       {data && withdrawalStatusHist.length > 0 && (
         <ChartPanel
           title="Status mix · this page"
-          subtitle="Counts are from the withdrawal rows loaded below (current page size)."
+          subtitle="Breakdown of payout requests on this page."
         >
           <Histogram
             items={withdrawalStatusHist}

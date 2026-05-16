@@ -2,11 +2,19 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Search, Download, UserPlus, Filter, Users, DollarSign, Wifi, X, ArrowRight, Ticket } from "lucide-react";
+import { Loader2, Search, Download, UserPlus, Filter, Users, DollarSign, Wifi, X, ArrowRight, Ticket, Clock, HardDrive } from "lucide-react";
 import { authFetch } from "@/lib/auth-client";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { formatTzs, formatTzsCompact } from "@/lib/format-currency";
 import { ChartPanel, Histogram, type HistItem } from "@/components/reseller/ResellerCharts";
+
+type ClientDevice = {
+  mac: string;
+  isActive: boolean;
+  expiresAt: string;
+  packageName: string | null;
+  isOnline: boolean;
+};
 
 type ClientRow = {
   id: string;
@@ -15,6 +23,18 @@ type ClientRow = {
   phone: string | null;
   totalSpent: number;
   totalPayments: number;
+  timeRemainingSeconds: number;
+  dataUsedMb: number;
+  isOnline: boolean;
+  accessStatus: "active" | "expired" | "none";
+  activeDeviceCount: number;
+  devices: ClientDevice[];
+  activeSubscription: {
+    status: string;
+    expiresAt: string;
+    package: { name: string };
+    dataUsedMb?: number;
+  } | null;
   latestSubscription: {
     status: string;
     expiresAt: string;
@@ -22,6 +42,28 @@ type ClientRow = {
   } | null;
   latestSession: { clientMac: string; startedAt: string; endedAt: string | null } | null;
 };
+
+function formatTimeRemaining(seconds: number): string {
+  if (seconds <= 0) return "Expired";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function formatDataMb(mb: number): string {
+  if (mb <= 0) return "—";
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+}
+
+function formatExpiresAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 export default function ResellerClientsPage() {
   const [rows, setRows] = useState<ClientRow[]>([]);
@@ -119,13 +161,8 @@ export default function ResellerClientsPage() {
     }
   }
 
-  function isSessionActive(s: ClientRow["latestSession"], sub: ClientRow["latestSubscription"]) {
-    if (sub?.status === "ACTIVE" && sub.expiresAt && new Date(sub.expiresAt) > new Date()) return true;
-    if (s && !s.endedAt) return true;
-    return false;
-  }
-
-  const activeCount = rows.filter((c) => isSessionActive(c.latestSession, c.latestSubscription)).length;
+  const activeCount = rows.filter((c) => c.accessStatus === "active").length;
+  const onlineCount = rows.filter((c) => c.isOnline).length;
   const totalSpend = rows.reduce((a, c) => a + c.totalSpent, 0);
 
   function initials(name: string | null) {
@@ -141,7 +178,7 @@ export default function ResellerClientsPage() {
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Clients</h1>
           <p className="text-onyx-400 mt-1">
-            Everyone who bought WiFi through your portal. Search by phone, name, email, or MAC. Export to CSV anytime.
+            All customers who paid through your portal — devices (MAC), time left, data used, and live Wi‑Fi status.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -183,9 +220,12 @@ export default function ResellerClientsPage() {
               <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center">
                 <Wifi className="w-3.5 h-3.5 text-emerald-400" />
               </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Online now</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Active access</span>
             </div>
-            <div className="text-xl font-black text-white">{activeCount}</div>
+            <div className="text-xl font-black text-white">
+              {activeCount}
+              <span className="text-sm text-emerald-400 font-medium ml-1">({onlineCount} online)</span>
+            </div>
           </div>
           <div className="rounded-xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-4">
             <div className="flex items-center gap-2 mb-1">
@@ -203,7 +243,7 @@ export default function ResellerClientsPage() {
       {clientGrowth.length > 0 && (
         <ChartPanel
           title="New clients (30 days)"
-          subtitle="Unique subscribers with first subscription in period — from analytics API."
+          subtitle="New customers who bought WiFi for the first time each day."
         >
           <Histogram variant="sky" items={clientGrowth} barHeightPx={112} formatValue={(n) => `${Math.round(n)}`} />
         </ChartPanel>
@@ -251,20 +291,23 @@ export default function ResellerClientsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[960px]">
               <thead>
                 <tr className="text-left text-onyx-400 border-b border-white/[0.06]">
-                  <th className="px-5 py-3 font-semibold">Customer</th>
-                  <th className="px-5 py-3 font-semibold">Latest package</th>
-                  <th className="px-5 py-3 font-semibold">Spend</th>
-                  <th className="px-5 py-3 font-semibold">Status</th>
-                  <th className="px-5 py-3 font-semibold text-right">Open</th>
+                  <th className="px-4 py-3 font-semibold">Customer</th>
+                  <th className="px-4 py-3 font-semibold">Devices (MAC)</th>
+                  <th className="px-4 py-3 font-semibold">Package</th>
+                  <th className="px-4 py-3 font-semibold">Time left</th>
+                  <th className="px-4 py-3 font-semibold">Data used</th>
+                  <th className="px-4 py-3 font-semibold">Spend</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 font-semibold text-right"> </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-5 py-12 text-center">
+                    <td colSpan={8} className="px-5 py-12 text-center">
                       <div className="w-14 h-14 rounded-2xl bg-gold-10 flex items-center justify-center mx-auto mb-4">
                         <Users className="w-7 h-7 text-gold" />
                       </div>
@@ -274,45 +317,84 @@ export default function ResellerClientsPage() {
                   </tr>
                 ) : (
                   rows.map((c) => (
-                    <tr key={c.id} className="hover:bg-gold-5/30 transition-colors">
-                      <td className="px-5 py-3">
+                    <tr key={c.id} className="hover:bg-gold-5/30 transition-colors align-top">
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-gold-10 flex items-center justify-center shrink-0">
                             <span className="text-xs font-bold text-gold">{initials(c.name)}</span>
                           </div>
-                          <div>
-                            <div className="font-medium text-white">{c.name || "—"}</div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-white truncate">{c.name || "WiFi guest"}</div>
                             <div className="text-xs text-onyx-400">{c.phone || c.email || "—"}</div>
-                            {c.latestSession?.clientMac && (
-                              <div className="text-[10px] font-mono text-onyx-500 mt-0.5">{c.latestSession.clientMac}</div>
-                            )}
                           </div>
                         </div>
                       </td>
-                      <td className="px-5 py-3">
-                        <span className="inline-flex items-center gap-1.5 text-xs text-onyx-300 bg-white/[0.04] px-2.5 py-1 rounded-lg">
-                          {c.latestSubscription?.package?.name || "—"}
-                        </span>
+                      <td className="px-4 py-3">
+                        {c.devices.length === 0 ? (
+                          <span className="text-xs text-onyx-500">No device linked</span>
+                        ) : (
+                          <ul className="space-y-1">
+                            {c.devices.slice(0, 3).map((d) => (
+                              <li key={d.mac} className="flex items-center gap-1.5 text-[11px] font-mono text-onyx-300">
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${d.isOnline ? "bg-emerald-400" : d.isActive ? "bg-amber-400" : "bg-onyx-500"}`}
+                                />
+                                {d.mac}
+                              </li>
+                            ))}
+                            {c.devices.length > 3 && (
+                              <li className="text-[10px] text-onyx-500">+{c.devices.length - 3} more</li>
+                            )}
+                          </ul>
+                        )}
                       </td>
-                      <td className="px-5 py-3">
-                        <div className="text-gold font-bold">{formatTzs(c.totalSpent)}</div>
-                        <div className="text-xs text-onyx-400">{c.totalPayments} payments</div>
+                      <td className="px-4 py-3">
+                        <div className="text-xs text-white font-medium">
+                          {c.activeSubscription?.package?.name || c.latestSubscription?.package?.name || "—"}
+                        </div>
+                        {c.activeSubscription && (
+                          <div className="text-[10px] text-onyx-500 mt-0.5">
+                            until {formatExpiresAt(c.activeSubscription.expiresAt)}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-5 py-3">
-                        {isSessionActive(c.latestSession, c.latestSubscription) ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <td className="px-4 py-3">
+                        <div className="inline-flex items-center gap-1 text-xs font-semibold text-onyx-200">
+                          <Clock className="w-3 h-3 text-gold shrink-0" />
+                          {formatTimeRemaining(c.timeRemainingSeconds)}
+                        </div>
+                        {c.activeDeviceCount > 1 && (
+                          <div className="text-[10px] text-onyx-500 mt-0.5">{c.activeDeviceCount} active devices</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="inline-flex items-center gap-1 text-xs text-onyx-200">
+                          <HardDrive className="w-3 h-3 text-sky-400 shrink-0" />
+                          {formatDataMb(c.dataUsedMb)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-gold font-bold text-sm">{formatTzs(c.totalSpent)}</div>
+                        <div className="text-[10px] text-onyx-500">{c.totalPayments} payments</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {c.isOnline ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             Online
                           </span>
+                        ) : c.accessStatus === "active" ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                            Active
+                          </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold bg-white/[0.04] text-onyx-400 border border-white/[0.08]">
-                            <span className="w-1.5 h-1.5 rounded-full bg-onyx-400" />
-                            Idle
+                          <span className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-bold bg-white/[0.04] text-onyx-400 border border-white/[0.08]">
+                            Expired
                           </span>
                         )}
                       </td>
-                      <td className="px-5 py-3 text-right">
-                        <Link href={`/reseller/clients/${c.id}`} className="text-gold text-xs font-semibold inline-flex items-center gap-1 hover:underline">
+                      <td className="px-4 py-3 text-right">
+                        <Link href={`/reseller/clients/${c.id}`} className="text-gold text-xs font-semibold inline-flex items-center gap-1 hover:underline whitespace-nowrap">
                           Profile <ArrowRight className="w-3 h-3" />
                         </Link>
                       </td>

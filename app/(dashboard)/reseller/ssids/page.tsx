@@ -122,8 +122,7 @@ export default function ResellerSsidsPage() {
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">SSID manager</h1>
           <p className="text-onyx-400 mt-1">
-            Create and edit SSID records per site. Open network: leave password empty. Push to physical Omada WLANs may
-            require controller sync outside this UI.
+            WiFi network names per site. Leave the password empty for an open guest network. Link each SSID to your Omada controller in the usual way.
           </p>
         </div>
         <button
@@ -182,7 +181,7 @@ export default function ResellerSsidsPage() {
       {!loading && ssidsBySite.length > 0 && (
         <ChartPanel
           title="SSIDs by site"
-          subtitle="Aggregated from your SSID list (same data as the table below)."
+          subtitle="How many WiFi names you have at each site."
         >
           <RankedBars rows={ssidsBySite} formatValue={(n) => `${Math.round(n)} SSIDs`} maxRows={12} />
         </ChartPanel>

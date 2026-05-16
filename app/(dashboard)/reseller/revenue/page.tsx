@@ -223,7 +223,7 @@ export default function ResellerRevenuePage() {
       ) : view === "chart" ? (
         <ChartPanel
           title="Gross revenue per day"
-          subtitle="Completed payments only. Respects status, package, and date filters above. Up to 45 days shown."
+          subtitle="Completed payments for the filters you chose (up to 45 days)."
         >
           <Histogram items={chartItems} barHeightPx={140} />
         </ChartPanel>

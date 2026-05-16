@@ -8,10 +8,42 @@ import { formatTzsCompact } from "@/lib/format-currency";
 import { Histogram, RankedBars } from "@/components/reseller/ResellerCharts";
 
 type Period = "7d" | "30d" | "90d" | "1y";
+type AnalyticsTab = "revenue" | "clients" | "packages" | "usage";
+
+type RevenuePayload = {
+  chart: { date: string; revenue: number; earnings: number; count: number }[];
+  totals: Record<string, number>;
+};
+type ClientsPayload = { chart: { date: string; newClients: number }[]; totalUniqueClients: number };
+type PackagesPayload = {
+  packages: {
+    id: string;
+    name: string;
+    revenue: number;
+    salesInPeriod: number;
+    _count: { subscriptions: number };
+  }[];
+};
+type UsagePayload = { peakHours: { hour: number; sessions: number; dataMb: number }[]; totalSessions: number };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function payloadForTab(tab: AnalyticsTab, payload: unknown): unknown {
+  if (!isRecord(payload)) return null;
+  if (tab === "revenue" && Array.isArray(payload.chart) && isRecord(payload.totals)) return payload;
+  if (tab === "clients" && Array.isArray(payload.chart) && typeof payload.totalUniqueClients === "number") {
+    return payload;
+  }
+  if (tab === "packages" && Array.isArray(payload.packages)) return payload;
+  if (tab === "usage" && Array.isArray(payload.peakHours)) return payload;
+  return null;
+}
 
 export default function ResellerAnalyticsPage() {
   const [period, setPeriod] = useState<Period>("30d");
-  const [tab, setTab] = useState<"revenue" | "clients" | "packages" | "usage">("revenue");
+  const [tab, setTab] = useState<AnalyticsTab>("revenue");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [payload, setPayload] = useState<unknown>(null);
@@ -31,6 +63,24 @@ export default function ResellerAnalyticsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  function selectTab(next: AnalyticsTab) {
+    if (next === tab) return;
+    setTab(next);
+    setPayload(null);
+    setErr(null);
+    setLoading(true);
+  }
+
+  function selectPeriod(next: Period) {
+    if (next === period) return;
+    setPeriod(next);
+    setPayload(null);
+    setErr(null);
+    setLoading(true);
+  }
+
+  const tabPayload = payloadForTab(tab, payload);
 
   async function exportCsv() {
     const res = await authFetch(`/api/v1/reseller/analytics?type=export&period=${period}`);
@@ -58,7 +108,7 @@ export default function ResellerAnalyticsPage() {
         <div className="flex flex-wrap gap-2">
           <select
             value={period}
-            onChange={(e) => setPeriod(e.target.value as Period)}
+            onChange={(e) => selectPeriod(e.target.value as Period)}
             className="rounded-xl border border-gold-10 bg-white/[0.04] px-3 py-2.5 text-sm text-white focus:border-gold-30 outline-none transition-colors"
           >
             <option value="7d">Last 7 days</option>
@@ -98,7 +148,7 @@ export default function ResellerAnalyticsPage() {
           <button
             key={id}
             type="button"
-            onClick={() => setTab(id)}
+            onClick={() => selectTab(id)}
             className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold border transition-all ${
               tab === id
                 ? "bg-gold-10 text-gold border-gold-30 shadow-sm shadow-gold/5"
@@ -120,17 +170,29 @@ export default function ResellerAnalyticsPage() {
             <Loader2 className="w-8 h-8 animate-spin text-gold" />
           </div>
         )}
-        {payload && tab === "revenue" ? <RevenueView data={payload as any} /> : null}
-        {payload && tab === "clients" ? <ClientsView data={payload as any} /> : null}
-        {payload && tab === "packages" ? <PackagesView data={payload as any} /> : null}
-        {payload && tab === "usage" ? <UsageView data={payload as any} /> : null}
+        {!loading && tab === "revenue" && tabPayload ? (
+          <RevenueView data={tabPayload as RevenuePayload} />
+        ) : null}
+        {!loading && tab === "clients" && tabPayload ? (
+          <ClientsView data={tabPayload as ClientsPayload} />
+        ) : null}
+        {!loading && tab === "packages" && tabPayload ? (
+          <PackagesView data={tabPayload as PackagesPayload} />
+        ) : null}
+        {!loading && tab === "usage" && tabPayload ? (
+          <UsageView data={tabPayload as UsagePayload} />
+        ) : null}
+        {!loading && !tabPayload && !err ? (
+          <p className="text-sm text-onyx-500 py-12 text-center">No analytics data for this period.</p>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function RevenueView({ data }: { data: { chart: { date: string; revenue: number; earnings: number; count: number }[]; totals: Record<string, number> } }) {
-  const items = data.chart.map((c) => ({
+function RevenueView({ data }: { data: RevenuePayload }) {
+  const chart = data.chart ?? [];
+  const items = chart.map((c) => ({
     label: c.date.slice(5),
     value: c.revenue,
     title: `${c.date}: ${formatTzsCompact(c.revenue)} · ${c.count} tx`,
@@ -168,15 +230,16 @@ function RevenueView({ data }: { data: { chart: { date: string; revenue: number;
       </div>
       <div>
         <h3 className="text-sm font-bold text-white mb-1">Daily gross revenue</h3>
-        <p className="text-xs text-onyx-400 mb-4">Histogram from the same period as your totals above.</p>
+        <p className="text-xs text-onyx-400 mb-4">Daily totals for the period you selected above.</p>
         <Histogram items={items} barHeightPx={128} />
       </div>
     </div>
   );
 }
 
-function ClientsView({ data }: { data: { chart: { date: string; newClients: number }[]; totalUniqueClients: number } }) {
-  const items = data.chart.map((c) => ({
+function ClientsView({ data }: { data: ClientsPayload }) {
+  const chart = data.chart ?? [];
+  const items = chart.map((c) => ({
     label: c.date.slice(5),
     value: c.newClients,
     title: `${c.date}: ${c.newClients} new`,
@@ -201,17 +264,18 @@ function ClientsView({ data }: { data: { chart: { date: string; newClients: numb
   );
 }
 
-function PackagesView({ data }: { data: { packages: { id: string; name: string; revenue: number; salesInPeriod: number; _count: { subscriptions: number } }[] } }) {
+function PackagesView({ data }: { data: PackagesPayload }) {
+  const packages = data.packages ?? [];
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-bold text-white mb-1">Revenue in period</h3>
-        <p className="text-xs text-onyx-400 mb-4">Ranked by gross revenue for the analytics period (same source as the table).</p>
+        <p className="text-xs text-onyx-400 mb-4">Best-selling plans in the period you selected.</p>
         <RankedBars
-          rows={data.packages.map((p) => ({
+          rows={packages.map((p) => ({
             name: p.name,
             value: p.revenue,
-            hint: `${p.salesInPeriod} sales · ${p._count.subscriptions} total subs`,
+            hint: `${p.salesInPeriod} sales in period · ${p._count.subscriptions} subscribers`,
           }))}
         />
       </div>
@@ -226,14 +290,22 @@ function PackagesView({ data }: { data: { packages: { id: string; name: string; 
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
-            {data.packages.map((p) => (
+            {packages.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-5 py-8 text-center text-onyx-500">
+                  No package sales in this period.
+                </td>
+              </tr>
+            ) : (
+              packages.map((p) => (
               <tr key={p.id} className="hover:bg-gold-5/30 transition-colors">
                 <td className="px-5 py-2.5 font-medium text-white">{p.name}</td>
-                <td className="px-5 py-2.5 text-onyx-300">{p._count.subscriptions}</td>
+                <td className="px-5 py-2.5 text-onyx-300">{p._count?.subscriptions ?? 0}</td>
                 <td className="px-5 py-2.5 text-onyx-300">{p.salesInPeriod}</td>
                 <td className="px-5 py-2.5 text-right text-gold font-bold">{formatTzsCompact(p.revenue)}</td>
               </tr>
-            ))}
+            ))
+            )}
           </tbody>
         </table>
       </div>
@@ -241,8 +313,9 @@ function PackagesView({ data }: { data: { packages: { id: string; name: string; 
   );
 }
 
-function UsageView({ data }: { data: { peakHours: { hour: number; sessions: number; dataMb: number }[]; totalSessions: number } }) {
-  const items = [...data.peakHours]
+function UsageView({ data }: { data: UsagePayload }) {
+  const peakHours = data.peakHours ?? [];
+  const items = [...peakHours]
     .sort((a, b) => a.hour - b.hour)
     .map((h) => ({
       label: String(h.hour).padStart(2, "0"),
@@ -262,7 +335,7 @@ function UsageView({ data }: { data: { peakHours: { hour: number; sessions: numb
       </div>
       <div>
         <h3 className="text-sm font-bold text-white mb-1">Sessions by hour of day</h3>
-        <p className="text-xs text-onyx-400 mb-4">Local server time — full 24h fingerprint from your WiFi session data.</p>
+        <p className="text-xs text-onyx-400 mb-4">When customers connect most often (24-hour view).</p>
         <Histogram variant="violet" items={items} barHeightPx={100} formatValue={(n) => `${Math.round(n)}`} />
       </div>
     </div>

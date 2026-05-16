@@ -467,10 +467,8 @@ export default function ResellerDeviceDetailPage() {
             </button>
             <h2 className="text-lg font-bold text-white pr-8">Adopt on Omada</h2>
             <p className="text-xs text-onyx-400 mt-2 mb-4">
-              If Omada asks for the AP’s current login (because tplinkeap.net credentials were changed), enter them here.
-              Fields open with <span className="font-mono text-onyx-300">admin</span> /{" "}
-              <span className="font-mono text-onyx-300">Admin@12345678</span> — edit or clear both to use the platform default (
-              <span className="font-mono text-onyx-300">OMADA_DEVICE_*</span> on the server).
+              If Omada asks for the access point login, enter the username and password from the AP (often the factory
+              defaults). Leave both fields empty to use SSDomada’s saved credentials.
             </p>
             <div className="space-y-3">
               <div>

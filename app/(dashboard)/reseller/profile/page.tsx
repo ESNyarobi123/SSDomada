@@ -121,7 +121,7 @@ export default function ResellerProfilePage() {
       <div>
         <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Profile & branding</h1>
         <p className="text-onyx-400 mt-1">
-          Business identity on SSDomada. Subdomain / slug is set at registration — contact support to change it.
+          Your company name, logo, and public WiFi login link. Contact support if you need to change your login address.
         </p>
       </div>
 
@@ -187,7 +187,7 @@ export default function ResellerProfilePage() {
       {/* ── Portal URL ── */}
       <div className="rounded-xl border border-gold-10 bg-gradient-to-br from-gold-5/20 via-transparent to-transparent p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-gold-600-op">Captive portal URL</div>
+          <div className="text-[10px] font-bold uppercase tracking-wider text-gold-600-op">WiFi login page</div>
           <div className="font-mono text-sm text-gold break-all mt-0.5">{portal}</div>
         </div>
         <div className="flex gap-2 shrink-0">
@@ -296,8 +296,7 @@ export default function ResellerProfilePage() {
             />
           </div>
           <div className="text-xs text-onyx-500">
-            Login email: <span className="text-onyx-300">{p.user.email}</span> — change in account settings if we add email
-            change later.
+            Login email: <span className="text-onyx-300">{p.user.email}</span>. Contact support to change it.
           </div>
         </div>
 

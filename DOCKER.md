@@ -69,6 +69,27 @@ DATABASE_URL="postgresql://ssdomada:ssdomada@localhost:5433/ssdomada" npx tsx pr
 | Reseller    | `reseller@ssdomada.com` | `Reseller@2026` |
 | End User    | `customer@example.com`  | `User@2026`   |
 
+## Captive portal uploads (logo & background)
+
+Reseller uploads are stored on disk at `public/uploads/captive/{resellerId}/` inside the app container. The database only saves the URL path (e.g. `/api/public/captive/...`).
+
+**Without a Docker volume**, files are lost when you remove or rebuild the `app` container (`docker compose down`, `docker compose up --build`, etc.). Postgres keeps the URLs, so the dashboard shows broken images until you upload again.
+
+Compose mounts a named volume **`captive_uploads`** → `/app/public/uploads` so logos and backgrounds survive rebuilds.
+
+**After adding this volume on an existing server** (uploads already lost):
+
+1. Recreate the app container: `docker compose up -d --force-recreate app`
+2. Re-upload logo/background from **Reseller → Captive portal**, or restore files into the volume:
+
+```bash
+# List volume path on the host (Docker manages the directory)
+docker volume inspect ssdomada_captive_uploads
+
+# Copy backups back (example)
+docker cp ./backup-captive/. ssdomada-app:/app/public/uploads/captive/
+```
+
 ## Services and ports
 
 | Service     | Container port | Host port | URL / notes                    |

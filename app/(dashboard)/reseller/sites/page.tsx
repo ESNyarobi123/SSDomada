@@ -82,8 +82,7 @@ export default function ResellerSitesPage() {
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Sites</h1>
           <p className="text-onyx-400 mt-1">
-            Locations for your hardware. Link Omada site IDs in admin tools when available — devices use sites for
-            grouping and Omada actions.
+            Group your access points by venue or area (shop, hotel, branch). Add a site before registering devices.
           </p>
         </div>
         <button
@@ -135,7 +134,7 @@ export default function ResellerSitesPage() {
       {!loading && sites.length > 0 && (
         <ChartPanel
           title="Devices per site"
-          subtitle="Live counts from your sites list (_count.devices)."
+          subtitle="Number of access points at each location."
         >
           <Histogram items={deviceHistogram} variant="sky" barHeightPx={120} formatValue={(n) => `${Math.round(n)} APs`} />
         </ChartPanel>

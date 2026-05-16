@@ -67,8 +67,7 @@ export async function GET(req: NextRequest) {
           createdAt: true,
           subscriptions: {
             where: { package: { resellerId: ctx.resellerId } } as any,
-            orderBy: { createdAt: "desc" },
-            take: 1,
+            orderBy: { expiresAt: "desc" },
             select: {
               id: true,
               status: true,
@@ -81,7 +80,7 @@ export async function GET(req: NextRequest) {
           wifiSessions: {
             where: { site: { resellerId: ctx.resellerId } } as any,
             orderBy: { startedAt: "desc" },
-            take: 1,
+            take: 3,
             select: { clientMac: true, clientIp: true, startedAt: true, endedAt: true },
           },
         },
@@ -89,31 +88,124 @@ export async function GET(req: NextRequest) {
       prisma.user.count({ where: userWhere as any }),
     ]);
 
-    // Enrich with spending data
-    const enriched = await Promise.all(
-      clients.map(async (client) => {
-        const totalSpent = await prisma.payment.aggregate({
-          where: { userId: client.id, resellerId: ctx.resellerId, status: "COMPLETED" as any },
-          _sum: { amount: true },
-          _count: true,
-        });
+    const now = new Date();
+    const userIds = clients.map((c) => c.id);
 
+    const [radiusUsers, paymentAggs] = await Promise.all([
+      userIds.length
+        ? prisma.radiusUser.findMany({
+            where: { resellerId: ctx.resellerId, userId: { in: userIds } },
+            orderBy: { expiresAt: "desc" },
+            select: {
+              userId: true,
+              username: true,
+              macAddress: true,
+              isActive: true,
+              expiresAt: true,
+              subscription: {
+                select: { dataUsedMb: true, package: { select: { name: true } } },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      Promise.all(
+        clients.map((client) =>
+          prisma.payment.aggregate({
+            where: { userId: client.id, resellerId: ctx.resellerId, status: "COMPLETED" as any },
+            _sum: { amount: true },
+            _count: true,
+          }),
+        ),
+      ),
+    ]);
+
+    const usernames = radiusUsers.map((r) => r.username);
+    const onlineSessions =
+      usernames.length > 0
+        ? await prisma.radacct.findMany({
+            where: { username: { in: usernames }, acctstoptime: null },
+            select: { username: true },
+            distinct: ["username"],
+          })
+        : [];
+    const onlineUsernames = new Set(onlineSessions.map((s) => s.username));
+
+    const radiusByUser = new Map<string, typeof radiusUsers>();
+    for (const ru of radiusUsers) {
+      if (!ru.userId) continue;
+      const list = radiusByUser.get(ru.userId) || [];
+      list.push(ru);
+      radiusByUser.set(ru.userId, list);
+    }
+
+    const enriched = clients.map((client, idx) => {
+      const totalSpent = paymentAggs[idx];
+      const subs = client.subscriptions;
+      const activeSubscription =
+        subs.find((s) => s.status === "ACTIVE" && s.expiresAt > now) ?? subs[0] ?? null;
+
+      const userRadius = radiusByUser.get(client.id) || [];
+      const devices = userRadius.map((ru) => {
+        const mac = ru.macAddress || ru.username;
+        const credsLive = ru.isActive && ru.expiresAt > now;
         return {
-          ...client,
-          latestSubscription: client.subscriptions[0] || null,
-          latestSession: client.wifiSessions[0] || null,
-          totalSpent: totalSpent._sum?.amount || 0,
-          totalPayments: totalSpent._count,
+          mac,
+          isActive: credsLive,
+          expiresAt: ru.expiresAt.toISOString(),
+          packageName: ru.subscription?.package?.name ?? null,
+          isOnline: credsLive && onlineUsernames.has(ru.username),
         };
-      })
-    );
+      });
+
+      const timeRemainingSeconds = activeSubscription
+        ? Math.max(0, Math.floor((activeSubscription.expiresAt.getTime() - now.getTime()) / 1000))
+        : 0;
+
+      const dataUsedMb = Math.max(
+        activeSubscription?.dataUsedMb ?? 0,
+        ...subs.map((s) => s.dataUsedMb),
+        ...userRadius.map((r) => r.subscription?.dataUsedMb ?? 0),
+      );
+
+      const isOnline = devices.some((d) => d.isOnline);
+
+      return {
+        id: client.id,
+        name: client.name,
+        email: client.email,
+        phone: client.phone,
+        isActive: client.isActive,
+        createdAt: client.createdAt,
+        latestSubscription: subs[0] || null,
+        activeSubscription,
+        latestSession: client.wifiSessions[0] || null,
+        recentSessions: client.wifiSessions,
+        devices,
+        timeRemainingSeconds,
+        dataUsedMb,
+        isOnline,
+        accessStatus: activeSubscription
+          ? activeSubscription.status === "ACTIVE" && activeSubscription.expiresAt > now
+            ? "active"
+            : "expired"
+          : "none",
+        totalSpent: totalSpent._sum?.amount || 0,
+        totalPayments: totalSpent._count,
+        activeDeviceCount: devices.filter((d) => d.isActive).length,
+      };
+    });
 
     // CSV Export
     if (format === "csv") {
-      const csvHeader = "Name,Email,Phone,Total Spent,Payments,Latest Package,Status\n";
-      const csvRows = enriched.map((c) =>
-        `"${c.name || ""}","${c.email || ""}","${c.phone || ""}",${c.totalSpent},${c.totalPayments},"${c.latestSubscription?.package?.name || ""}","${c.latestSubscription?.status || "none"}"`
-      ).join("\n");
+      const csvHeader =
+        "Name,Email,Phone,Total Spent,Payments,Package,Access Status,Time Left (min),Data Used (MB),Devices (MAC)\n";
+      const csvRows = enriched
+        .map((c) => {
+          const mins = Math.ceil(c.timeRemainingSeconds / 60);
+          const macs = c.devices.map((d) => d.mac).join("; ");
+          return `"${c.name || ""}","${c.email || ""}","${c.phone || ""}",${c.totalSpent},${c.totalPayments},"${c.activeSubscription?.package?.name || ""}","${c.accessStatus}",${mins},${c.dataUsedMb.toFixed(1)},"${macs}"`;
+        })
+        .join("\n");
 
       return new Response(csvHeader + csvRows, {
         headers: {

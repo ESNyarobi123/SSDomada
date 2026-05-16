@@ -359,6 +359,9 @@ export default function PortalPageClient() {
                           </span>
                         ) : null}
                       </div>
+                      {p.description ? (
+                        <p className="text-[11px] text-onyx-400 mt-0.5 line-clamp-2">{p.description}</p>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] text-onyx-400">
                         <span className="inline-flex items-center gap-0.5">
                           <Clock className="w-3 h-3" /> {formatDuration(p.durationMinutes)}

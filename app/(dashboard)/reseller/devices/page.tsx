@@ -134,8 +134,8 @@ export default function ResellerDevicesPage() {
         setOmadaNotice(
           pre +
             (detail
-              ? `Device saved in SSDomada. Omada did not accept adopt: ${detail}. If you saw 404, deploy the latest code (v2 adopt retry) or confirm Open API path for your controller version.`
-              : "Device saved in SSDomada, but Omada adopt did not succeed. Check Omada Controller and Open API settings.")
+              ? `Device saved here, but Omada could not adopt it: ${detail}. Check that the AP is online in Omada and the MAC is correct.`
+              : "Device saved here, but Omada could not adopt it. Open Omada Controller and confirm the access point is reachable.")
         );
       } else if (d.omada.siteLinkSource && d.omada.siteLinkSource !== "db") {
         const note = d.omada.resolutionNote ? ` ${d.omada.resolutionNote}` : "";
@@ -161,8 +161,8 @@ export default function ResellerDevicesPage() {
         <div>
           <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Devices & APs</h1>
           <p className="text-onyx-400 mt-1 max-w-xl">
-            Register access points by MAC, assign them to a site, then open a device for live Omada stats, reboot, and
-            connected clients.
+            Add access points by MAC address, assign each to a location, then open a device to see who is connected,
+            reboot it, or block a client.
           </p>
         </div>
         <button
@@ -243,7 +243,7 @@ export default function ResellerDevicesPage() {
       {/* ── Chart ── */}
       <ChartPanel
         title="Fleet snapshot"
-        subtitle="Summary counts from your devices API (matches the cards above)."
+        subtitle="Online, offline, and pending access points."
       >
         <StackedStrip
           segments={[
@@ -438,7 +438,7 @@ export default function ResellerDevicesPage() {
               MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF (from the AP Status page or Omada Pending list). The AP must
               appear under this Omada site as Pending before adopt succeeds. If the AP’s tplinkeap.net username/password
               were changed, enter them below so Omada can adopt (same as the controller popup). If you hit a device limit (HTTP 402),
-              upgrade the platform plan or ask super-admin to review paywall settings for testing.
+              upgrade your platform plan under Settings.
             </p>
             <form onSubmit={addDevice} className="space-y-4">
               <div>

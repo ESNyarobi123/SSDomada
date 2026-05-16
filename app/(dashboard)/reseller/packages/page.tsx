@@ -39,6 +39,43 @@ const PRESETS: { label: string; duration: DurationKey; minutes: number }[] = [
   { label: "Unlimited", duration: "UNLIMITED", minutes: 999999 },
 ];
 
+const DEFAULT_PRESET = PRESETS.find((p) => p.duration === "HOURS_24")!;
+
+function findMatchingPreset(duration: string, minutes: number) {
+  return PRESETS.find((p) => p.duration === duration && p.minutes === minutes) ?? null;
+}
+
+/** Map custom minutes to the closest PackageDuration enum for the database. */
+function durationEnumFromMinutes(minutes: number): DurationKey {
+  const exact = PRESETS.find((p) => p.minutes === minutes);
+  if (exact) return exact.duration;
+  let best = PRESETS[0];
+  let bestDiff = Math.abs(PRESETS[0].minutes - minutes);
+  for (const p of PRESETS) {
+    const diff = Math.abs(p.minutes - minutes);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = p;
+    }
+  }
+  return best.duration;
+}
+
+function formatDurationLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 1440) {
+    const h = minutes / 60;
+    return Number.isInteger(h) ? `${h} hr` : `${h.toFixed(1)} hr`;
+  }
+  const d = minutes / 1440;
+  return Number.isInteger(d) ? `${d} day${d === 1 ? "" : "s"}` : `${d.toFixed(1)} days`;
+}
+
+function kbpsToMbps(kbps: number | null): number | "" {
+  if (kbps == null || kbps <= 0) return "";
+  return Math.round(kbps / 1000);
+}
+
 type Pkg = {
   id: string;
   name: string;
@@ -48,6 +85,7 @@ type Pkg = {
   duration: string;
   durationMinutes: number;
   dataLimitMb: number | null;
+  speedLimitUp: number | null;
   speedLimitDown: number | null;
   maxDevices: number;
   isActive: boolean;
@@ -65,17 +103,40 @@ export default function ResellerPackagesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [durationMode, setDurationMode] = useState<"preset" | "custom">("preset");
   const [form, setForm] = useState({
     name: "",
     description: "",
     price: 1000,
-    duration: "HOURS_24" as DurationKey,
-    durationMinutes: 1440,
+    duration: DEFAULT_PRESET.duration,
+    durationMinutes: DEFAULT_PRESET.minutes,
     dataLimitMb: "" as string | number,
+    speedLimitDownMbps: "" as string | number,
+    speedLimitUpMbps: "" as string | number,
     maxDevices: 1,
     isFeatured: false,
     sortOrder: 0,
   });
+
+  function packagePayload() {
+    const minutes = Math.max(1, Math.round(Number(form.durationMinutes)));
+    return {
+      name: form.name.trim(),
+      description: form.description.trim() || undefined,
+      price: Number(form.price),
+      currency: "TZS" as const,
+      duration: durationMode === "preset" ? form.duration : durationEnumFromMinutes(minutes),
+      durationMinutes: minutes,
+      dataLimitMb: form.dataLimitMb === "" ? undefined : Number(form.dataLimitMb),
+      speedLimitDown:
+        form.speedLimitDownMbps === "" ? undefined : Math.round(Number(form.speedLimitDownMbps) * 1000),
+      speedLimitUp:
+        form.speedLimitUpMbps === "" ? undefined : Math.round(Number(form.speedLimitUpMbps) * 1000),
+      maxDevices: Math.max(1, Math.round(Number(form.maxDevices))),
+      isFeatured: form.isFeatured,
+      sortOrder: Math.round(Number(form.sortOrder)),
+    };
+  }
 
   async function load() {
     setLoading(true);
@@ -95,6 +156,8 @@ export default function ResellerPackagesPage() {
 
   function openEdit(p: Pkg) {
     setEditId(p.id);
+    const match = findMatchingPreset(p.duration, p.durationMinutes);
+    setDurationMode(match ? "preset" : "custom");
     setForm({
       name: p.name,
       description: p.description || "",
@@ -102,6 +165,8 @@ export default function ResellerPackagesPage() {
       duration: p.duration as DurationKey,
       durationMinutes: p.durationMinutes,
       dataLimitMb: p.dataLimitMb ?? "",
+      speedLimitDownMbps: kbpsToMbps(p.speedLimitDown),
+      speedLimitUpMbps: kbpsToMbps(p.speedLimitUp),
       maxDevices: p.maxDevices,
       isFeatured: p.isFeatured,
       sortOrder: p.sortOrder,
@@ -112,18 +177,7 @@ export default function ResellerPackagesPage() {
     e.preventDefault();
     setSaving(true);
     setErr(null);
-    const body = {
-      name: form.name.trim(),
-      description: form.description.trim() || undefined,
-      price: Number(form.price),
-      currency: "TZS",
-      duration: form.duration,
-      durationMinutes: form.durationMinutes,
-      dataLimitMb: form.dataLimitMb === "" ? undefined : Number(form.dataLimitMb),
-      maxDevices: form.maxDevices,
-      isFeatured: form.isFeatured,
-      sortOrder: form.sortOrder,
-    };
+    const body = packagePayload();
     const res = await fetch("/api/v1/reseller/packages", {
       method: "POST",
       credentials: "include",
@@ -148,17 +202,7 @@ export default function ResellerPackagesPage() {
     if (!editId) return;
     setSaving(true);
     setErr(null);
-    const body = {
-      name: form.name.trim(),
-      description: form.description.trim() || undefined,
-      price: Number(form.price),
-      duration: form.duration,
-      durationMinutes: form.durationMinutes,
-      dataLimitMb: form.dataLimitMb === "" ? undefined : Number(form.dataLimitMb),
-      maxDevices: form.maxDevices,
-      isFeatured: form.isFeatured,
-      sortOrder: form.sortOrder,
-    };
+    const body = packagePayload();
     const res = await fetch(`/api/v1/reseller/packages/${editId}`, {
       method: "PATCH",
       credentials: "include",
@@ -179,13 +223,16 @@ export default function ResellerPackagesPage() {
   }
 
   function resetForm() {
+    setDurationMode("preset");
     setForm({
       name: "",
       description: "",
       price: 1000,
-      duration: "HOURS_24",
-      durationMinutes: 1440,
+      duration: DEFAULT_PRESET.duration,
+      durationMinutes: DEFAULT_PRESET.minutes,
       dataLimitMb: "",
+      speedLimitDownMbps: "",
+      speedLimitUpMbps: "",
       maxDevices: 1,
       isFeatured: false,
       sortOrder: 0,
@@ -308,7 +355,7 @@ export default function ResellerPackagesPage() {
       {!loading && list.length > 0 && (
         <ChartPanel
           title="Revenue leaders"
-          subtitle="All-time gross revenue per package from your packages API (sales.totalRevenue)."
+          subtitle="Total sales earned per plan (all time)."
         >
           <RankedBars
             rows={list.map((p) => ({
@@ -369,8 +416,9 @@ export default function ResellerPackagesPage() {
                             {p.isFeatured && <Star className="w-3 h-3 text-gold fill-gold/30" />}
                           </div>
                           <div className="text-xs text-onyx-400">
-                            {p.duration.replace(/_/g, " ")}
+                            {formatDurationLabel(p.durationMinutes)}
                             {p.dataLimitMb ? ` · ${p.dataLimitMb} MB` : ""}
+                            {p.speedLimitDown ? ` · ${Math.round(p.speedLimitDown / 1000)} Mbps` : ""}
                             {p.maxDevices > 1 ? ` · ${p.maxDevices} devices` : ""}
                           </div>
                         </div>
@@ -442,54 +490,7 @@ export default function ResellerPackagesPage() {
               </div>
               <h2 className="text-lg font-bold text-white">{editId ? "Edit package" : "New package"}</h2>
             </div>
-            <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Duration preset</label>
-              <select
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-                value={
-                  PRESETS.find((x) => x.duration === form.duration && x.minutes === form.durationMinutes)?.label ??
-                  "__custom__"
-                }
-                onChange={(e) => {
-                  if (e.target.value === "__custom__") return;
-                  const pr = PRESETS.find((x) => x.label === e.target.value);
-                  if (pr) setForm((f) => ({ ...f, duration: pr.duration, durationMinutes: pr.minutes }));
-                }}
-              >
-                {PRESETS.map((pr) => (
-                  <option key={pr.label} value={pr.label}>
-                    {pr.label}
-                  </option>
-                ))}
-                <option value="__custom__">Custom (edit enum + minutes)</option>
-              </select>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Duration enum</label>
-                <select
-                  value={form.duration}
-                  onChange={(e) => setForm((f) => ({ ...f, duration: e.target.value as DurationKey }))}
-                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs text-white focus:border-gold-30 outline-none transition-colors"
-                >
-                  {PRESETS.map((pr) => (
-                    <option key={pr.duration} value={pr.duration}>
-                      {pr.duration}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Minutes</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={form.durationMinutes}
-                  onChange={(e) => setForm((f) => ({ ...f, durationMinutes: Number(e.target.value) }))}
-                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-                />
-              </div>
-            </div>
+
             <div>
               <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Name</label>
               <input
@@ -497,6 +498,7 @@ export default function ResellerPackagesPage() {
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                placeholder="e.g. Daily, 1 Hour, Trial"
               />
             </div>
             <div>
@@ -505,7 +507,9 @@ export default function ResellerPackagesPage() {
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                placeholder="Short note shown to customers on the portal"
               />
+              <p className="mt-1 text-[11px] text-onyx-500">Visible on the captive portal under the package name.</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -527,6 +531,79 @@ export default function ResellerPackagesPage() {
                   value={form.dataLimitMb}
                   onChange={(e) => setForm((f) => ({ ...f, dataLimitMb: e.target.value === "" ? "" : Number(e.target.value) }))}
                   className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                  placeholder="Optional — leave empty for unlimited"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Wi‑Fi duration</label>
+              <select
+                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                value={durationMode === "custom" ? "__custom__" : (findMatchingPreset(form.duration, form.durationMinutes)?.label ?? "__custom__")}
+                onChange={(e) => {
+                  if (e.target.value === "__custom__") {
+                    setDurationMode("custom");
+                    return;
+                  }
+                  const pr = PRESETS.find((x) => x.label === e.target.value);
+                  if (pr) {
+                    setDurationMode("preset");
+                    setForm((f) => ({ ...f, duration: pr.duration, durationMinutes: pr.minutes }));
+                  }
+                }}
+              >
+                {PRESETS.map((pr) => (
+                  <option key={pr.label} value={pr.label}>
+                    {pr.label}
+                  </option>
+                ))}
+                <option value="__custom__">Custom duration…</option>
+              </select>
+              {durationMode === "custom" && (
+                <div className="mt-3">
+                  <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Custom duration (minutes)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    value={form.durationMinutes}
+                    onChange={(e) => setForm((f) => ({ ...f, durationMinutes: Number(e.target.value) }))}
+                    className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                    placeholder="e.g. 700 for ~11.6 hours"
+                  />
+                  <p className="mt-1 text-[11px] text-onyx-500">
+                    Customers see: <span className="text-onyx-300">{formatDurationLabel(form.durationMinutes)}</span>
+                  </p>
+                </div>
+              )}
+              {durationMode === "preset" && (
+                <p className="mt-1 text-[11px] text-onyx-500">
+                  Access lasts {formatDurationLabel(form.durationMinutes)} after payment.
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Download (Mbps)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={form.speedLimitDownMbps}
+                  onChange={(e) => setForm((f) => ({ ...f, speedLimitDownMbps: e.target.value === "" ? "" : Number(e.target.value) }))}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
+                  placeholder="Optional"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Upload (Mbps)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={form.speedLimitUpMbps}
+                  onChange={(e) => setForm((f) => ({ ...f, speedLimitUpMbps: e.target.value === "" ? "" : Number(e.target.value) }))}
+                  className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
                   placeholder="Optional"
                 />
               </div>
@@ -541,6 +618,7 @@ export default function ResellerPackagesPage() {
                   onChange={(e) => setForm((f) => ({ ...f, maxDevices: Number(e.target.value) }))}
                   className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
                 />
+                <p className="mt-1 text-[11px] text-onyx-500">Devices online at the same time per payment (1 = one phone).</p>
               </div>
               <div>
                 <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Sort order</label>
@@ -550,6 +628,7 @@ export default function ResellerPackagesPage() {
                   onChange={(e) => setForm((f) => ({ ...f, sortOrder: Number(e.target.value) }))}
                   className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
                 />
+                <p className="mt-1 text-[11px] text-onyx-500">Lower numbers appear first on the portal (0 = top).</p>
               </div>
             </div>
             <label className="flex items-center gap-2.5 text-sm text-onyx-300 cursor-pointer">
