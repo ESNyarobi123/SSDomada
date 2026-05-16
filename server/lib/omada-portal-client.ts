@@ -37,7 +37,12 @@ export interface OmadaPortalAuthInput {
   ssidName: string;
   radioId: number;
   site: string;
-  /** Session duration in milliseconds (converted to microseconds for Omada). */
+  /**
+   * Session duration in MILLISECONDS as supplied by callers. The actual
+   * value sent to Omada depends on `OMADA_EXT_PORTAL_TIME_UNIT`
+   * (`microsecond` default → multiplied by 1000; `millisecond` → sent
+   * as-is). See `callExtPortalAuth`.
+   */
   time: number;
 }
 
@@ -178,14 +183,28 @@ export class OmadaPortalClient {
 
   /**
    * POST /api/v2/hotspot/extPortal/auth
-   * `time` must be in **microseconds** per TP-Link external portal API.
+   *
+   * Per TP-Link's docs the `time` field is "microseconds" — but their own
+   * PHP code template names the variable `$milliseconds` and passes it
+   * directly, which is one of the most common confusions when integrating
+   * with Omada. Real-world testing on Omada v5.x suggests this field is
+   * actually interpreted in **milliseconds** on some firmware versions.
+   *
+   * To stay safe across builds we expose a `OMADA_EXT_PORTAL_TIME_UNIT`
+   * env var: set it to `millisecond` (recommended) if you find Omada keeps
+   * authorising the client for far longer than your package duration. The
+   * default behaviour (`microsecond`) matches the original docs.
    */
   private static async callExtPortalAuth(
     input: OmadaPortalAuthInput,
     creds: CredentialBundle,
   ): Promise<OmadaPortalAuthResult> {
     const url = `${OmadaPortalClient.controllerBase()}/api/v2/hotspot/extPortal/auth`;
-    const timeMicros = Math.round(input.time * 1000);
+    const unit = (process.env.OMADA_EXT_PORTAL_TIME_UNIT || "microsecond").toLowerCase();
+    // input.time is already in MILLISECONDS (durationMs from callers).
+    // microsecond mode: multiply by 1000.
+    // millisecond mode: send as-is (Omada interprets directly as ms).
+    const timeValue = unit === "millisecond" ? input.time : Math.round(input.time * 1000);
 
     const payload = {
       clientMac: input.clientMac,
@@ -193,9 +212,13 @@ export class OmadaPortalClient {
       ssidName: input.ssidName,
       radioId: input.radioId,
       site: input.site,
-      time: timeMicros,
+      time: timeValue,
       authType: 4,
     };
+
+    console.log(
+      `[OmadaPortal] extPortal/auth mac=${input.clientMac} ap=${input.apMac} ssid=${input.ssidName} timeMs=${input.time} sent=${timeValue} unit=${unit}`,
+    );
 
     const res = await fetchSafe(url, {
       method: "POST",
