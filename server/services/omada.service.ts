@@ -410,18 +410,61 @@ export class OmadaService {
     const mac = normaliseMacHyphen(clientMac);
 
     // === Strategy ===
-    // The Omada UI "Unauthorize" button is the only thing that *actually*
-    // forces the captive portal to intercept the client again. It uses
-    // cookie-based `/api/v2/...` paths with the Hotspot Operator session.
     //
-    // The Open API `DELETE /openapi/v1/.../clients/{mac}` happily returns
-    // `errorCode=0` but, on most controller builds, does NOT clear the
-    // wireless authorisation state — the client just stays online.
+    // 1. Probe Open API "cancelAuth"-style paths (Bearer auth, /openapi/v1)
+    //    These are documented under the "Authorized Client" Swagger group
+    //    as `cancelAuthClient`. Exact path varies by firmware so we try
+    //    several candidates.
     //
-    // So we try the cookie-based UI route FIRST. Only if every UI-style
-    // path 404s (controller too new/old) do we fall back to the Open API
-    // DELETE, accepting that it might be a no-op but at least removes the
-    // client row from the controller's database.
+    // 2. Fall back to the cookie-based `/api/v2/.../unauthorize` paths
+    //    used by the Omada UI's "Unauthorize" button.
+    //
+    // 3. Final fallback: Open API `DELETE /clients/{mac}`. This returns
+    //    `errorCode=0` on most builds but is often a no-op — only useful
+    //    to clean up the controller's client row.
+    //
+    // Order matters: we want the action that ACTUALLY revokes captive
+    // portal access (so the next packet from the phone is intercepted).
+    // The cookie-based UI button does this; the OpenAPI DELETE does not.
+    const cancelPaths = [
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/clients/${mac}/cancelAuth`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/clients/${mac}/cancel-auth`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/authorized-clients/${mac}/cancel`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/authorized-clients/${mac}`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}/cancelAuth`,
+      `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/hotspot/extPortal/deauth`,
+    ];
+
+    for (const path of cancelPaths) {
+      try {
+        // Some "cancel" endpoints want the MAC in the body (extPortal/deauth);
+        // others use the URL only. We post `{ clientMac, mac, site }` so all
+        // shapes are covered — extra fields are ignored by the controller.
+        const body = { clientMac: mac, mac, site: omadaSiteId };
+        const isDeleteShape = /\/authorized-clients\/[^/]+$/.test(path);
+        const res = isDeleteShape
+          ? ((await OmadaClient.delete<Record<string, unknown>>(path)) as Record<string, unknown>)
+          : ((await OmadaClient.post<Record<string, unknown>>(path, body)) as Record<string, unknown>);
+        const ec = typeof res.errorCode === "number" ? res.errorCode : undefined;
+        const msg = typeof res.msg === "string" ? res.msg : undefined;
+        console.log(
+          `[Omada] unauthorize(openapi-cancel) mac=${mac} site=${omadaSiteId} method=${isDeleteShape ? "DELETE" : "POST"} path=${path} errorCode=${ec ?? "?"} msg=${msg ?? "?"}`,
+        );
+        if (ec === 0) {
+          return { ok: true, path, errorCode: ec, msg };
+        }
+        // Real (non-404) failure → keep probing other candidates anyway,
+        // since these are best-guess endpoints. Stop only on auth errors.
+        if (ec === -1 || ec === 401) {
+          return { ok: false, path, errorCode: ec, msg };
+        }
+      } catch (err: any) {
+        const message = err?.message || String(err);
+        console.warn(`[Omada] unauthorize(openapi-cancel) threw mac=${mac} path=${path}: ${message}`);
+      }
+    }
+
+    // None of the OpenAPI cancel candidates worked → try cookie-based UI.
     const viaUi = await OmadaPortalClient.unauthoriseClient({
       omadaSiteId,
       clientMac: mac,
@@ -436,6 +479,8 @@ export class OmadaService {
       `[Omada] unauthorize(UI) failed mac=${mac} site=${omadaSiteId} via=${viaUi.path} errorCode=${viaUi.errorCode ?? "?"} msg=${viaUi.message ?? "?"} — falling back to Open API DELETE`,
     );
 
+    // Last resort: the documented DELETE. Often a no-op on captive-portal
+    // state but at least removes the client row from the controller.
     const deletePath = `/openapi/v1/${OMADA_CONTROLLER_ID}/sites/${omadaSiteId}/clients/${mac}`;
     try {
       const res = (await OmadaClient.delete<Record<string, unknown>>(deletePath)) as Record<string, unknown>;
