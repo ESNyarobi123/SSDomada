@@ -569,28 +569,31 @@ export class RadiusService {
     const { omadaSiteId, clientMac, portalSession, label, hardBlock = false } = args;
     const errors: string[] = [];
 
-    // 1. Clear OpenAPI auth state.
-    const unauth = await OmadaService.deauthorizeClient(omadaSiteId, clientMac).catch((err: any) => ({
-      ok: false as const,
-      path: "(threw)" as const,
-      errorCode: undefined,
-      msg: err?.message || String(err),
-    }));
-    if (unauth.ok) {
-      console.log(`[RADIUS] UNAUTHORIZED ${label} mac=${clientMac} site=${omadaSiteId} via ${unauth.path}`);
+    // 1. RECONNECT FIRST while the client is still in Omada's active list.
+    //    This drops their wireless association on the AP so the phone has
+    //    to re-associate. If we DELETE before reconnect, Omada will reply
+    //    "This client does not exist." and the radio link stays up.
+    const reconnect = await OmadaService.disconnectClient(omadaSiteId, clientMac).catch(
+      (err: any) => ({
+        ok: false as const,
+        path: "(threw)" as const,
+        errorCode: undefined,
+        msg: err?.message || String(err),
+      }),
+    );
+
+    if (reconnect.ok) {
+      console.log(
+        `[RADIUS] RECONNECTED ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path}`,
+      );
     } else {
-      const detail = unauth.msg ?? `errorCode=${unauth.errorCode}`;
-      errors.push(`Omada UNAUTHORIZE failed ${label} site=${omadaSiteId}: ${detail}`);
-      // Use "UNAUTHORIZE-FAILED" so it matches the same greps people use for
-      // success traces ("UNAUTHORIZE" / "UNAUTHORIZED").
       console.warn(
-        `[RADIUS] UNAUTHORIZE-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${unauth.errorCode ?? "?"} msg=${detail}`,
+        `[RADIUS] RECONNECT-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${reconnect.errorCode ?? "?"} msg=${reconnect.msg ?? "?"}`,
       );
     }
 
-    // 2. External Portal v2 deauth — only works if we have the original
-    //    apMac / ssidName / radioId from PortalSession. Without these we
-    //    can't construct a valid extPortal/auth call.
+    // 2. External Portal v2 deauth — best-effort. Re-call `extPortal/auth`
+    //    with time=1 to expire the captive-portal session. May be a no-op.
     if (portalSession) {
       try {
         const res = await OmadaService.deauthorizeExternalPortalClient({
@@ -612,24 +615,23 @@ export class RadiusService {
       }
     }
 
-    // 3. Reconnect (cheap secondary). Some controller builds drop the
-    //    association on reconnect even when block is rejected.
-    const reconnect = await OmadaService.disconnectClient(omadaSiteId, clientMac).catch(
-      (err: any) => ({
-        ok: false as const,
-        path: "(threw)" as const,
-        errorCode: undefined,
-        msg: err?.message || String(err),
-      }),
-    );
-
-    if (reconnect.ok) {
-      console.log(
-        `[RADIUS] RECONNECTED ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path}`,
-      );
+    // 3. DELETE the client from Omada's authorised list — the "Unauthorize"
+    //    button on the Omada controller UI. After this, when the client
+    //    re-associates and tries to use the network, the AP will treat them
+    //    as a fresh guest and redirect them to the captive portal.
+    const unauth = await OmadaService.deauthorizeClient(omadaSiteId, clientMac).catch((err: any) => ({
+      ok: false as const,
+      path: "(threw)" as const,
+      errorCode: undefined,
+      msg: err?.message || String(err),
+    }));
+    if (unauth.ok) {
+      console.log(`[RADIUS] UNAUTHORIZED ${label} mac=${clientMac} site=${omadaSiteId} via ${unauth.path}`);
     } else {
+      const detail = unauth.msg ?? `errorCode=${unauth.errorCode}`;
+      errors.push(`Omada UNAUTHORIZE failed ${label} site=${omadaSiteId}: ${detail}`);
       console.warn(
-        `[RADIUS] RECONNECT-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${reconnect.errorCode ?? "?"} msg=${reconnect.msg ?? "?"}`,
+        `[RADIUS] UNAUTHORIZE-FAILED ${label} mac=${clientMac} site=${omadaSiteId} errorCode=${unauth.errorCode ?? "?"} msg=${detail}`,
       );
     }
 
