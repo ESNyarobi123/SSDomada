@@ -93,6 +93,23 @@ export class OmadaPortalClient {
     }
   }
 
+  /**
+   * Revoke an existing external-portal authorisation by re-calling
+   * `extPortal/auth` with `time = 1` (effectively zero). Omada has no
+   * dedicated deauth endpoint for external portals; this is the documented
+   * trick to invalidate the session — the next packet from the client will
+   * be intercepted by the captive portal again.
+   *
+   * Caller must supply the same `apMac`, `ssidName`, `radioId`, `site` that
+   * were used during the original authorise call (we have them on
+   * PortalSession).
+   */
+  static async deauthorise(
+    input: Omit<OmadaPortalAuthInput, "time">,
+  ): Promise<OmadaPortalAuthResult> {
+    return OmadaPortalClient.authorise({ ...input, time: 1 });
+  }
+
   private static controllerBase(): string {
     if (!OMADA_URL) throw new OmadaPortalApiError("OMADA_URL is not set");
     if (!OMADA_CONTROLLER_ID) throw new OmadaPortalApiError("OMADA_CONTROLLER_ID is not set");

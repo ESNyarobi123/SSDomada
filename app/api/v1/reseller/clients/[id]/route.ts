@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { RadiusService } from "@/server/services/radius.service";
-import { OmadaService } from "@/server/services/omada.service";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -133,35 +132,26 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
           omadaSiteId: { not: null },
         },
         orderBy: { updatedAt: "desc" },
-        select: { omadaSiteId: true, clientMac: true },
+        select: {
+          omadaSiteId: true,
+          clientMac: true,
+          apMac: true,
+          ssidName: true,
+          radioId: true,
+        },
         take: 3,
       });
       for (const t of omadaTargets) {
         if (!t.omadaSiteId) continue;
-        try {
-          await OmadaService.deauthorizeClient(t.omadaSiteId, t.clientMac);
-        } catch (err) {
-          console.warn(`[Reseller Client PATCH] Omada deauthorize failed mac=${mac}:`, err);
-        }
-        const kick: { ok: boolean; path: string; errorCode?: number; msg?: string } =
-          await OmadaService.disconnectClient(t.omadaSiteId, t.clientMac).catch((err: any) => ({
-            ok: false,
-            path: "(threw)",
-            msg: err?.message || String(err),
-          }));
-        if (!kick.ok) {
-          const block: { ok: boolean; path: string; errorCode?: number; msg?: string } =
-            await OmadaService.blockClient(t.omadaSiteId, t.clientMac).catch((err: any) => ({
-              ok: false,
-              path: "(threw)",
-              msg: err?.message || String(err),
-            }));
-          if (!block.ok) {
-            console.warn(
-              `[Reseller Client PATCH] Omada disconnect/block failed mac=${mac}: kick=${kick.msg ?? kick.errorCode} block=${block.msg ?? block.errorCode}`,
-            );
-          }
-        }
+        await RadiusService.forceKickFromOmada({
+          omadaSiteId: t.omadaSiteId,
+          clientMac: t.clientMac,
+          portalSession:
+            t.apMac && t.ssidName && t.radioId !== null
+              ? { apMac: t.apMac, ssidName: t.ssidName, radioId: t.radioId }
+              : null,
+          label: `block-action reseller=${ctx.resellerId}`,
+        });
       }
       await logResellerAction(ctx.userId, "client.blocked", "User", id, { mac, reason }, getClientIp(req));
       return apiSuccess({ message: `MAC ${mac} blocked and disconnected` });

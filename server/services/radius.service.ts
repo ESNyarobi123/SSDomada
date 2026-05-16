@@ -13,6 +13,12 @@ type RadiusUserForEnforcement = {
 
 type AccessLimitReason = "expired" | "data_limit";
 
+type OmadaKickTarget = {
+  omadaSiteId: string;
+  clientMac: string;
+  portalSession: { apMac: string; ssidName: string; radioId: number } | null;
+};
+
 const radiusUserEnforcementSelect = {
   id: true,
   resellerId: true,
@@ -307,48 +313,42 @@ export class RadiusService {
         expiresAt: { lte: now },
         omadaSiteId: { not: null },
       },
-      select: { id: true, omadaSiteId: true, clientMac: true, resellerId: true },
+      select: {
+        id: true,
+        omadaSiteId: true,
+        clientMac: true,
+        resellerId: true,
+        apMac: true,
+        ssidName: true,
+        radioId: true,
+      },
       take: 500,
     });
 
     let staleKicked = 0;
+    const alreadyKickedMacs = new Set(
+      Array.from(usersToRevoke.values())
+        .map((u) => u.macAddress?.toUpperCase())
+        .filter(Boolean) as string[],
+    );
     for (const session of stalePortalSessions) {
       if (!session.omadaSiteId) continue;
-      // Skip if we already disconnected this MAC in the active-expired loop above.
-      if (usersToRevoke && Array.from(usersToRevoke.values()).some((u) => u.macAddress === session.clientMac)) {
-        continue;
-      }
-      try {
-        await OmadaService.deauthorizeClient(session.omadaSiteId, session.clientMac);
-      } catch (err) {
-        console.warn(`[RADIUS] stale deauthorize failed mac=${session.clientMac}:`, err);
-      }
-      const kick = await OmadaService.disconnectClient(session.omadaSiteId, session.clientMac).catch(
-        (err: any) => ({
-          ok: false,
-          path: "(threw)" as const,
-          msg: err?.message || String(err),
-        }),
-      );
-      if (kick.ok) {
+      if (alreadyKickedMacs.has(session.clientMac.toUpperCase())) continue;
+
+      const result = await this.forceKickFromOmada({
+        omadaSiteId: session.omadaSiteId,
+        clientMac: session.clientMac,
+        portalSession:
+          session.apMac && session.ssidName && session.radioId !== null
+            ? { apMac: session.apMac, ssidName: session.ssidName, radioId: session.radioId }
+            : null,
+        label: `stale-session=${session.id}`,
+      });
+      if (result.kicked) {
         staleKicked++;
         omadaDeauthorized++;
-        continue;
       }
-      const block = await OmadaService.blockClient(session.omadaSiteId, session.clientMac).catch(
-        (err: any) => ({
-          ok: false,
-          path: "(threw)" as const,
-          msg: err?.message || String(err),
-        }),
-      );
-      if (block.ok) {
-        staleKicked++;
-        omadaDeauthorized++;
-        setTimeout(() => {
-          OmadaService.unblockClient(session.omadaSiteId!, session.clientMac).catch(() => {});
-        }, 10_000);
-      }
+      errors.push(...result.errors);
     }
 
     const expiredPortalSessions = await prisma.portalSession.updateMany({
@@ -448,67 +448,14 @@ export class RadiusService {
       );
     }
     for (const target of targets) {
-      // 1. Clear captive-portal auth state (works for OpenAPI guest auth flows).
-      try {
-        await OmadaService.deauthorizeClient(target.omadaSiteId, target.clientMac);
-      } catch (err: any) {
-        const message = err?.message || String(err);
-        errors.push(`Omada deauthorize failed user=${user.username} site=${target.omadaSiteId}: ${message}`);
-        console.warn(`[RADIUS] Omada deauthorize failed for ${user.username}:`, err);
-      }
-
-      // 2. Kick the client off the AP. CRITICAL for External Portal sessions —
-      //    without this the user keeps using their existing connection even
-      //    after `unauthorize` succeeds.
-      type OmadaCallResult = { ok: boolean; path: string; errorCode?: number; msg?: string };
-      const kick: OmadaCallResult = await OmadaService.disconnectClient(
-        target.omadaSiteId,
-        target.clientMac,
-      ).catch((err: any) => ({
-        ok: false,
-        path: "(threw)",
-        msg: err?.message || String(err),
-      }));
-      if (kick.ok) {
-        omadaDeauthorized++;
-        console.log(
-          `[RADIUS] Disconnected expired client user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId} via ${kick.path}`,
-        );
-      } else {
-        // Fall back to a hard block — block then unblock so the next
-        // payment can re-authorize. This is the only reliable way on some
-        // controller builds where /reconnect is rejected.
-        const block: OmadaCallResult = await OmadaService.blockClient(
-          target.omadaSiteId,
-          target.clientMac,
-        ).catch((err: any) => ({
-          ok: false,
-          path: "(threw)",
-          msg: err?.message || String(err),
-        }));
-        if (block.ok) {
-          omadaDeauthorized++;
-          console.log(
-            `[RADIUS] Blocked expired client (reconnect failed) user=${user.username} mac=${target.clientMac} site=${target.omadaSiteId}`,
-          );
-          // Best-effort: unblock after 10s so future payments work normally.
-          setTimeout(() => {
-            OmadaService.unblockClient(target.omadaSiteId, target.clientMac).catch((err) => {
-              console.warn(
-                `[RADIUS] Delayed unblock failed mac=${target.clientMac}: ${err?.message || err}`,
-              );
-            });
-          }, 10_000);
-        } else {
-          const detail = `disconnect=${kick.msg ?? `errorCode=${kick.errorCode}`} block=${block.msg ?? `errorCode=${block.errorCode}`}`;
-          errors.push(
-            `Omada disconnect+block failed user=${user.username} site=${target.omadaSiteId}: ${detail}`,
-          );
-          console.warn(
-            `[RADIUS] Omada disconnect+block failed user=${user.username} mac=${target.clientMac}: ${detail}`,
-          );
-        }
-      }
+      const result = await this.forceKickFromOmada({
+        omadaSiteId: target.omadaSiteId,
+        clientMac: target.clientMac,
+        portalSession: target.portalSession,
+        label: `user=${user.username}`,
+      });
+      if (result.kicked) omadaDeauthorized++;
+      errors.push(...result.errors);
     }
 
     await this.revokeAccess(user.username);
@@ -554,16 +501,33 @@ export class RadiusService {
         OR: [{ radiusUserId: user.id }, { clientMac: user.macAddress }],
       },
       orderBy: { updatedAt: "desc" },
-      select: { omadaSiteId: true, clientMac: true },
+      select: {
+        omadaSiteId: true,
+        clientMac: true,
+        apMac: true,
+        ssidName: true,
+        radioId: true,
+      },
       take: 5,
     });
 
-    const targets = new Map<string, { omadaSiteId: string; clientMac: string }>();
+    const targets = new Map<
+      string,
+      OmadaKickTarget
+    >();
     for (const session of sessions) {
       if (!session.omadaSiteId) continue;
       targets.set(`${session.omadaSiteId}:${session.clientMac}`, {
         omadaSiteId: session.omadaSiteId,
         clientMac: session.clientMac,
+        portalSession:
+          session.apMac && session.ssidName && session.radioId !== null
+            ? {
+                apMac: session.apMac,
+                ssidName: session.ssidName,
+                radioId: session.radioId,
+              }
+            : null,
       });
     }
 
@@ -577,11 +541,119 @@ export class RadiusService {
         targets.set(`${site.omadaSiteId}:${user.macAddress}`, {
           omadaSiteId: site.omadaSiteId,
           clientMac: user.macAddress,
+          portalSession: null,
         });
       }
     }
 
     return Array.from(targets.values());
+  }
+
+  /**
+   * Aggressively force a client off Omada — used both by the cron job and
+   * the stale-session sweep. We've observed that on some controller builds
+   * `/reconnect` returns `errorCode === 0` but the AP does not actually drop
+   * the association (or it drops and the client immediately re-associates
+   * because the External Portal auth-state is still active). The only
+   * reliable kick is to BLOCK the client (adds them to the AP blocklist),
+   * then UNBLOCK after a short delay so future payments can re-authorise.
+   *
+   * Order of operations:
+   *   1. OpenAPI `unauthorize`   (clears any OpenAPI auth state)
+   *   2. External Portal deauth  (re-call extPortal/auth with time=1 to expire the portal session)
+   *   3. BLOCK                   (primary kick — drops connection + prevents reassoc)
+   *   4. Reconnect               (best-effort secondary kick)
+   *   5. Schedule UNBLOCK in 30s (so the next payment can authorise)
+   */
+  static async forceKickFromOmada(args: {
+    omadaSiteId: string;
+    clientMac: string;
+    portalSession?: { apMac: string; ssidName: string; radioId: number } | null;
+    label: string;
+  }): Promise<{ kicked: boolean; errors: string[] }> {
+    const { omadaSiteId, clientMac, portalSession, label } = args;
+    const errors: string[] = [];
+
+    // 1. Clear OpenAPI auth state (cheap, doesn't hurt if not used).
+    try {
+      await OmadaService.deauthorizeClient(omadaSiteId, clientMac);
+    } catch (err: any) {
+      const message = err?.message || String(err);
+      errors.push(`Omada unauthorize failed ${label} site=${omadaSiteId}: ${message}`);
+      console.warn(`[RADIUS] Omada unauthorize failed ${label}:`, err);
+    }
+
+    // 2. External Portal v2 deauth — only works if we have the original
+    //    apMac / ssidName / radioId from PortalSession. Without these we
+    //    can't construct a valid extPortal/auth call.
+    if (portalSession) {
+      try {
+        const res = await OmadaService.deauthorizeExternalPortalClient({
+          clientMac,
+          apMac: portalSession.apMac,
+          ssidName: portalSession.ssidName,
+          radioId: portalSession.radioId,
+          site: omadaSiteId,
+        });
+        if (res.ok) {
+          console.log(`[RADIUS] extPortal/auth deauth ok ${label} mac=${clientMac}`);
+        } else {
+          console.warn(
+            `[RADIUS] extPortal/auth deauth failed ${label} mac=${clientMac}: errorCode=${res.errorCode} msg=${res.message}`,
+          );
+        }
+      } catch (err: any) {
+        console.warn(`[RADIUS] extPortal/auth deauth threw ${label}:`, err?.message || err);
+      }
+    }
+
+    // 3. BLOCK — primary force-kick. Adds client to AP blocklist which both
+    //    drops the current association and prevents immediate re-association.
+    const block = await OmadaService.blockClient(omadaSiteId, clientMac).catch((err: any) => ({
+      ok: false as const,
+      path: "(threw)" as const,
+      errorCode: undefined,
+      msg: err?.message || String(err),
+    }));
+
+    // 4. Reconnect (cheap secondary). Some controller builds drop the
+    //    association on reconnect even when block is rejected.
+    const reconnect = await OmadaService.disconnectClient(omadaSiteId, clientMac).catch(
+      (err: any) => ({
+        ok: false as const,
+        path: "(threw)" as const,
+        errorCode: undefined,
+        msg: err?.message || String(err),
+      }),
+    );
+
+    if (block.ok) {
+      console.log(
+        `[RADIUS] BLOCKED ${label} mac=${clientMac} site=${omadaSiteId} via ${block.path} (reconnect=${reconnect.ok ? "ok" : `fail:${reconnect.msg ?? reconnect.errorCode}`})`,
+      );
+      // 5. Schedule UNBLOCK in 30s so the client can re-pay and reconnect.
+      setTimeout(() => {
+        OmadaService.unblockClient(omadaSiteId, clientMac).catch((err) => {
+          console.warn(
+            `[RADIUS] Delayed unblock failed ${label} mac=${clientMac}: ${err?.message || err}`,
+          );
+        });
+      }, 30_000);
+      return { kicked: true, errors };
+    }
+
+    if (reconnect.ok) {
+      // Block failed but reconnect succeeded — still considered kicked (best effort).
+      console.log(
+        `[RADIUS] reconnect-only kick ${label} mac=${clientMac} site=${omadaSiteId} via ${reconnect.path} (block=${block.msg ?? block.errorCode})`,
+      );
+      return { kicked: true, errors };
+    }
+
+    const detail = `block=${block.msg ?? `errorCode=${block.errorCode}`} reconnect=${reconnect.msg ?? `errorCode=${reconnect.errorCode}`}`;
+    errors.push(`Omada force-kick failed ${label} site=${omadaSiteId}: ${detail}`);
+    console.warn(`[RADIUS] Omada force-kick failed ${label} mac=${clientMac}: ${detail}`);
+    return { kicked: false, errors };
   }
 
   private static async getTotalUsageBytes(username: string): Promise<bigint> {

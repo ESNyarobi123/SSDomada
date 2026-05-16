@@ -7,7 +7,6 @@ import {
   logResellerAction,
   getClientIp,
 } from "@/server/middleware/reseller-auth";
-import { OmadaService } from "@/server/services/omada.service";
 import { RadiusService } from "@/server/services/radius.service";
 
 /**
@@ -21,9 +20,9 @@ import { RadiusService } from "@/server/services/radius.service";
  *
  * Steps:
  *   1. Revoke their RADIUS rows so they can't auto-reauth.
- *   2. Call Omada `clients/{mac}/reconnect` — drops association on the AP.
- *   3. Fall back to `clients/{mac}/block` then unblock after 10s if the
- *      reconnect endpoint isn't available on this controller version.
+ *   2. Run the same full force-kick sequence the cron uses:
+ *      OpenAPI unauthorize → extPortal/auth deauth (if portal info known) →
+ *      block → reconnect → schedule unblock 30s later.
  *
  * Returns full Omada response so the operator can see what failed if any.
  */
@@ -38,24 +37,44 @@ export async function POST(req: NextRequest) {
 
     const mac = rawMac.toUpperCase();
 
-    // Resolve the Omada site for this MAC: explicit override → portal session
-    // → reseller's first Omada-linked site.
+    // Resolve the Omada site (+ portal-session details if we have them) for
+    // this MAC: explicit override → portal session → reseller's first
+    // Omada-linked site.
     let omadaSiteId: string | null = typeof body?.siteId === "string" ? body.siteId : null;
     let resolvedVia: "explicit" | "portal_session" | "default_site" = "explicit";
+    let portalSession:
+      | { apMac: string; ssidName: string; radioId: number }
+      | null = null;
 
-    if (!omadaSiteId) {
-      const session = await prisma.portalSession.findFirst({
-        where: {
-          resellerId: ctx.resellerId,
-          clientMac: mac,
-          omadaSiteId: { not: null },
-        },
-        orderBy: { updatedAt: "desc" },
-        select: { omadaSiteId: true },
-      });
-      if (session?.omadaSiteId) {
-        omadaSiteId = session.omadaSiteId;
+    const sessionMatch = await prisma.portalSession.findFirst({
+      where: {
+        resellerId: ctx.resellerId,
+        clientMac: mac,
+        omadaSiteId: { not: null },
+      },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        omadaSiteId: true,
+        apMac: true,
+        ssidName: true,
+        radioId: true,
+      },
+    });
+    if (sessionMatch) {
+      if (!omadaSiteId && sessionMatch.omadaSiteId) {
+        omadaSiteId = sessionMatch.omadaSiteId;
         resolvedVia = "portal_session";
+      }
+      if (
+        sessionMatch.apMac &&
+        sessionMatch.ssidName &&
+        sessionMatch.radioId !== null
+      ) {
+        portalSession = {
+          apMac: sessionMatch.apMac,
+          ssidName: sessionMatch.ssidName,
+          radioId: sessionMatch.radioId,
+        };
       }
     }
     if (!omadaSiteId) {
@@ -78,7 +97,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Revoke RADIUS so future auth requests are rejected.
+    // 1. Revoke RADIUS so future auth requests are rejected.
     let radiusRevoked = 0;
     try {
       radiusRevoked = await RadiusService.revokeByMac(ctx.resellerId, mac);
@@ -86,55 +105,39 @@ export async function POST(req: NextRequest) {
       console.warn(`[Reseller Kick] revokeByMac failed mac=${mac}:`, err);
     }
 
-    const deauth = await OmadaService.deauthorizeClient(omadaSiteId, mac).catch((err: any) => ({
-      errorCode: -1 as const,
-      msg: err?.message || String(err),
-    }));
-
-    const kick = await OmadaService.disconnectClient(omadaSiteId, mac).catch((err: any) => ({
-      ok: false as const,
-      path: "(threw)",
-      msg: err?.message || String(err),
-    }));
-
-    let blockUsed = false;
-    let block: Awaited<ReturnType<typeof OmadaService.blockClient>> | null = null;
-    if (!kick.ok) {
-      blockUsed = true;
-      block = await OmadaService.blockClient(omadaSiteId, mac).catch((err: any) => ({
-        ok: false as const,
-        path: "(threw)",
-        msg: err?.message || String(err),
-      }));
-      if (block.ok) {
-        setTimeout(() => {
-          OmadaService.unblockClient(omadaSiteId!, mac).catch((err) => {
-            console.warn(`[Reseller Kick] Delayed unblock failed mac=${mac}: ${err?.message || err}`);
-          });
-        }, 10_000);
-      }
-    }
-
-    const ok = kick.ok || Boolean(block?.ok);
+    // 2. Run the same force-kick sequence the cron uses (unauthorize +
+    //    extPortal deauth + block + reconnect + scheduled unblock).
+    const kickResult = await RadiusService.forceKickFromOmada({
+      omadaSiteId,
+      clientMac: mac,
+      portalSession,
+      label: `manual reseller=${ctx.resellerId}`,
+    });
 
     await logResellerAction(
       ctx.userId,
       "client.kicked",
       "PortalSession",
       mac,
-      { mac, omadaSiteId, resolvedVia, ok, radiusRevoked },
+      {
+        mac,
+        omadaSiteId,
+        resolvedVia,
+        ok: kickResult.kicked,
+        radiusRevoked,
+        portalSessionUsed: Boolean(portalSession),
+      },
       getClientIp(req),
     );
 
     return apiSuccess({
-      ok,
+      ok: kickResult.kicked,
       mac,
       omadaSiteId,
       resolvedVia,
       radiusRevoked,
-      deauthorize: { errorCode: (deauth as any).errorCode, msg: (deauth as any).msg },
-      reconnect: kick,
-      block: blockUsed ? block : null,
+      portalSessionUsed: Boolean(portalSession),
+      errors: kickResult.errors,
     });
   } catch (err: any) {
     console.error("[Reseller Kick POST] Error:", err);

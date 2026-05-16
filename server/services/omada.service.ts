@@ -360,6 +360,21 @@ export class OmadaService {
   }
 
   /**
+   * Tear down an External Portal v2 session (Omada has no dedicated deauth
+   * endpoint — we re-authorise the same client/AP/SSID combo with `time = 1`
+   * so the controller treats the session as expired immediately).
+   */
+  static async deauthorizeExternalPortalClient(
+    input: Omit<OmadaPortalAuthInput, "time">,
+  ): Promise<OmadaPortalAuthResult> {
+    return OmadaPortalClient.deauthorise({
+      ...input,
+      clientMac: normaliseMacHyphen(input.clientMac),
+      apMac: normaliseMacHyphen(input.apMac),
+    });
+  }
+
+  /**
    * Legacy OpenAPI authorize for controller-built-in guest portals.
    * Kept for non-external-portal flows; do NOT use for external portals.
    */
