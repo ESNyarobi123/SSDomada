@@ -1,6 +1,12 @@
 import { prisma } from "@/server/lib/prisma";
 import { SnippeService } from "./snippe.service";
-import { computeInitialSubscriptionState, computePlanPeriodEnd } from "./reseller-plan-access.service";
+import {
+  computeInitialSubscriptionState,
+  computePlanPeriodEnd,
+  formatPlanPeriodLabel,
+  getPlanAccessSnapshot,
+  planDaysRemaining,
+} from "./reseller-plan-access.service";
 
 /**
  * RESELLER PLAN SERVICE
@@ -223,6 +229,38 @@ export class ResellerPlanService {
     });
 
     return { subscription: sub, checkoutUrl: snippe.checkoutUrl, requiresPayment: true };
+  }
+
+  /** Billing + paywall snapshot for dashboard sidebar and plan picker. */
+  static async getBillingAccess(resellerId: string) {
+    const [usage, accessSnapshot] = await Promise.all([
+      this.computeUsage(resellerId),
+      getPlanAccessSnapshot(resellerId),
+    ]);
+    const sub = usage.subscription;
+    const access = accessSnapshot.access;
+    return {
+      ...usage,
+      features: accessSnapshot.features,
+      access: {
+        ok: access.ok,
+        enforced: accessSnapshot.enforced,
+        code: access.ok ? undefined : access.code,
+        message: access.ok ? undefined : access.message,
+      },
+      period: sub
+        ? {
+            status: sub.status as string,
+            planName: sub.plan?.name ?? null,
+            planSlug: sub.plan?.slug ?? null,
+            endsAt: sub.currentPeriodEnd,
+            trialEndsAt: sub.trialEndsAt,
+            daysRemaining: planDaysRemaining(sub.currentPeriodEnd),
+            label: formatPlanPeriodLabel(sub),
+            cancelAtPeriodEnd: Boolean(sub.cancelAtPeriodEnd),
+          }
+        : null,
+    };
   }
 
   /**

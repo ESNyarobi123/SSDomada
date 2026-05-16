@@ -64,8 +64,9 @@ function RegisterForm() {
       }
       const user = json.data.user as AuthUser;
       setStoredToken(json.data.token);
-      if (role === "RESELLER" && requestedPlanSlug) {
-        router.push(`/reseller/settings?plan=${encodeURIComponent(requestedPlanSlug)}`);
+      if (role === "RESELLER") {
+        const q = requestedPlanSlug ? `?plan=${encodeURIComponent(requestedPlanSlug)}` : "";
+        router.push(`/reseller/plan${q}`);
       } else {
         router.push(redirectAfterAuth(user));
       }

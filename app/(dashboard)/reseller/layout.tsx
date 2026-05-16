@@ -27,6 +27,10 @@ import {
 import { useEffect, useLayoutEffect, useState } from "react";
 import Image from "next/image";
 import { setStoredToken, fetchSession, redirectAfterAuth, authFetch } from "@/lib/auth-client";
+import { resellerJson } from "@/lib/reseller-fetch";
+import { ResellerPlanSidebar, type ResellerBillingSidebar } from "@/components/reseller/ResellerPlanSidebar";
+
+const RESELLER_PLAN_PATH = "/reseller/plan";
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -86,6 +90,8 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [impersonationBar, setImpersonationBar] = useState(false);
   const [notices, setNotices] = useState<DashboardNotice[]>([]);
+  const [billing, setBilling] = useState<ResellerBillingSidebar | null>(null);
+  const [billingReady, setBillingReady] = useState(false);
 
   useLayoutEffect(() => {
     try {
@@ -102,6 +108,32 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
       /* ignore */
     }
   }, [pathname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setBillingReady(false);
+      let impersonating = false;
+      try {
+        impersonating = sessionStorage.getItem(IMPERSONATION_ACTIVE_KEY) === "1";
+      } catch {
+        /* ignore */
+      }
+      const r = await resellerJson<ResellerBillingSidebar>("/api/v1/reseller/billing");
+      if (cancelled) return;
+      if (r.ok && r.data) {
+        setBilling(r.data);
+        if (!impersonating && !r.data.access.ok && pathname !== RESELLER_PLAN_PATH) {
+          const q = r.data.access.code === "PLAN_EXPIRED" ? "?expired=1" : "";
+          router.replace(`${RESELLER_PLAN_PATH}${q}`);
+        }
+      }
+      setBillingReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, router]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,7 +211,21 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
     router.refresh();
   }
 
+  const planLocked = billingReady && Boolean(billing && !billing.access.ok && !impersonationBar);
+
+  function PlanSidebarBlock({ collapsed: navCollapsed }: { collapsed?: boolean }) {
+    if (!billingReady) {
+      return (
+        <div
+          className={`rounded-xl border border-white/[0.06] bg-white/[0.02] ${navCollapsed ? "h-11 w-11 mx-auto" : "h-20"}`}
+        />
+      );
+    }
+    return <ResellerPlanSidebar billing={billing} collapsed={navCollapsed} />;
+  }
+
   function NavLinks({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
+    if (planLocked) return null;
     return (
       <div className={collapsed ? "space-y-1" : "space-y-5"}>
         {sections.map((section, si) => (
@@ -276,8 +322,19 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
             </div>
           )}
         </div>
-        <nav className="min-h-0 flex-1 scrollable-no-scrollbar overflow-x-hidden overflow-y-auto p-2 pt-3 pb-1">
-          <NavLinks collapsed={collapsed} />
+        <nav className="min-h-0 flex-1 scrollable-no-scrollbar overflow-x-hidden overflow-y-auto p-2 pt-3 pb-1 space-y-3">
+          {planLocked ? (
+            <div className={collapsed ? "pt-1" : "px-1"}>
+              <PlanSidebarBlock collapsed={collapsed} />
+            </div>
+          ) : (
+            <>
+              <NavLinks collapsed={collapsed} />
+              <div className={collapsed ? "pt-1" : "px-1"}>
+                <PlanSidebarBlock collapsed={collapsed} />
+              </div>
+            </>
+          )}
         </nav>
         <div className="p-2 border-t border-white/[0.04]">
           <button
@@ -307,7 +364,13 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
         {open && (
           <div className="lg:hidden fixed inset-0 top-[52px] z-30 bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)}>
             <div className="border-b border-white/[0.06] bg-onyx-900/95 backdrop-blur-xl px-4 py-4 max-h-[70vh] scrollable-no-scrollbar overflow-y-auto overflow-x-hidden" onClick={(e) => e.stopPropagation()}>
-              <NavLinks collapsed={false} onNavigate={() => setOpen(false)} />
+              {planLocked ? (
+                <div className="mb-4">
+                  <PlanSidebarBlock collapsed={false} />
+                </div>
+              ) : (
+                <NavLinks collapsed={false} onNavigate={() => setOpen(false)} />
+              )}
               <button
                 type="button"
                 onClick={() => {

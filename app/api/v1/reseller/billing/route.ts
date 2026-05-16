@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
 
   try {
-    const data = await ResellerPlanService.computeUsage(ctx.resellerId);
+    const data = await ResellerPlanService.getBillingAccess(ctx.resellerId);
     return apiSuccess(data);
   } catch (err) {
     console.error("[Reseller Billing GET] Error:", err);
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
         resellerId: ctx.resellerId,
         planId: body.planId,
         customerPhone: body.phone,
-        callbackUrl: `${baseUrl}/reseller/settings?billing=success`,
+        callbackUrl: `${baseUrl}/reseller/plan?billing=success`,
         webhookUrl: `${baseUrl}/api/webhooks/snippe`,
       });
 

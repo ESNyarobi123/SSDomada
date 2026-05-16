@@ -188,6 +188,31 @@ export function computePlanPeriodEnd(plan: { interval: string }, now = new Date(
   return end;
 }
 
+export function planDaysRemaining(endsAt: Date | string | null | undefined, now = new Date()): number | null {
+  if (!endsAt) return null;
+  const end = endsAt instanceof Date ? endsAt : new Date(endsAt);
+  if (Number.isNaN(end.getTime())) return null;
+  return Math.max(0, Math.ceil((end.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+export function formatPlanPeriodLabel(subscription: {
+  status?: string;
+  currentPeriodEnd?: Date | string | null;
+  trialEndsAt?: Date | string | null;
+} | null): string {
+  if (!subscription?.currentPeriodEnd) return "No active plan";
+  const days = planDaysRemaining(subscription.currentPeriodEnd);
+  if (days == null) return "—";
+  if (subscription.status === "TRIAL" && subscription.trialEndsAt) {
+    const trialDays = planDaysRemaining(subscription.trialEndsAt);
+    if (trialDays != null && trialDays <= days) {
+      return trialDays === 0 ? "Trial ends today" : `Trial: ${trialDays} day${trialDays === 1 ? "" : "s"} left`;
+    }
+  }
+  if (days === 0) return "Expires today";
+  return `${days} day${days === 1 ? "" : "s"} left`;
+}
+
 export function computeInitialSubscriptionState(
   plan: { interval: string; trialDays?: number | null },
   status?: string,

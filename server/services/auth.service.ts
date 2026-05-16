@@ -2,7 +2,6 @@ import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/server/lib/prisma";
 import { OmadaService } from "@/server/services/omada.service";
-import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 import type { UserRole } from "@prisma/client";
 
 const SESSION_DAYS = 30;
@@ -122,9 +121,7 @@ export class AuthService {
         console.error("[AuthService] ensureResellerSite failed:", err);
       });
 
-      await ResellerPlanService.assignInitialPlan(reseller.id, data.planSlug).catch((err) => {
-        console.error("[AuthService] assignInitialPlan failed:", err);
-      });
+      // Platform plan is chosen on /reseller/plan after signup (trial or payment).
 
       const full = await prisma.user.findUnique({
         where: { id: user.id },
