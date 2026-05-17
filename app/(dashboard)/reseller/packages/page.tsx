@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, Plus, Star, Pencil, Trash2, ToggleLeft, ToggleRight, X, Package, DollarSign, Users, Zap } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
+import { notifySetupGuideRefresh } from "@/lib/reseller-setup-guide-events";
 import { formatTzs, formatTzsCompact } from "@/lib/format-currency";
 import { ChartPanel, RankedBars } from "@/components/reseller/ResellerCharts";
 
@@ -194,6 +195,7 @@ export default function ResellerPackagesPage() {
       setShowCreate(false);
       resetForm();
       void load();
+      notifySetupGuideRefresh();
     }
   }
 

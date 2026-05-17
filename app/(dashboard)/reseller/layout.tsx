@@ -29,6 +29,7 @@ import Image from "next/image";
 import { setStoredToken, fetchSession, redirectAfterAuth, authFetch } from "@/lib/auth-client";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { ResellerPlanSidebar, type ResellerBillingSidebar } from "@/components/reseller/ResellerPlanSidebar";
+import { ResellerSetupGuide } from "@/components/reseller/ResellerSetupGuide";
 
 const RESELLER_PLAN_PATH = "/reseller/plan";
 
@@ -431,6 +432,9 @@ export default function ResellerLayout({ children }: { children: React.ReactNode
           </div>
         )}
         <main className="min-h-0 flex-1 scrollable-no-scrollbar overflow-y-auto overflow-x-hidden overscroll-y-contain p-4 md:p-8 page-enter">
+          {billingReady && billing?.access.ok && pathname !== RESELLER_PLAN_PATH && (
+            <ResellerSetupGuide />
+          )}
           {children}
         </main>
       </div>

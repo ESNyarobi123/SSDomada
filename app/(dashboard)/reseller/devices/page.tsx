@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, Plus, Search, Router, Wifi, WifiOff, RefreshCw, X, ArrowRight, CircleDot } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
+import { notifySetupGuideRefresh } from "@/lib/reseller-setup-guide-events";
 import { ChartPanel, Histogram, StackedStrip } from "@/components/reseller/ResellerCharts";
 
 type Site = { id: string; name: string; location: string | null; omadaSiteId?: string | null };
@@ -150,6 +151,7 @@ export default function ResellerDevicesPage() {
       const r = await resellerJson<Site[]>("/api/v1/reseller/sites");
       if (r.ok && r.data) setSites(r.data);
     })();
+    notifySetupGuideRefresh();
   }
 
   const onlinePct = summary.total > 0 ? Math.round((summary.online / summary.total) * 100) : 0;

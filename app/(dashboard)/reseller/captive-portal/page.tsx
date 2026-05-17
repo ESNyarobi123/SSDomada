@@ -17,6 +17,7 @@ import {
 import { resellerJson } from "@/lib/reseller-fetch";
 import { authFetch } from "@/lib/auth-client";
 import { resolveCaptiveAssetUrl } from "@/lib/portal-assets";
+import { notifySetupGuideRefresh } from "@/lib/reseller-setup-guide-events";
 
 type Config = {
   id: string;
@@ -125,6 +126,7 @@ export default function ResellerCaptivePortalPage() {
     }
     setRequestOk(r.data?.message || "Request sent.");
     setAdminNote("");
+    notifySetupGuideRefresh();
   }
 
   async function uploadCaptiveAsset(kind: "logo" | "bgImage", file: File) {
@@ -202,6 +204,7 @@ export default function ResellerCaptivePortalPage() {
     else {
       setOk("Saved");
       void load();
+      notifySetupGuideRefresh();
     }
   }
 
@@ -516,7 +519,10 @@ export default function ResellerCaptivePortalPage() {
         </div>
       </form>
 
-      <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 md:p-6 space-y-4">
+      <div
+        id="controller-setup"
+        className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 md:p-6 space-y-4 scroll-mt-24"
+      >
         <h2 className="text-base font-bold text-white">Controller setup</h2>
         <p className="text-sm text-onyx-400">
           Ask our team to link this portal on your Omada controller for your Wi‑Fi.

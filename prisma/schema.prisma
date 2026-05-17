@@ -210,7 +210,9 @@ model Reseller {
   totalEarnings  Float   @default(0.00)
   currency       String  @default("TZS")
 
-  isActive  Boolean  @default(true)
+  isActive                Boolean   @default(true)
+  setupGuideDismissedAt   DateTime? // first-time setup guide dismissed
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

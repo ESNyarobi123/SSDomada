@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Wifi, Eye, EyeOff, Power, X, Radio, Signal, Shield } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
+import { notifySetupGuideRefresh } from "@/lib/reseller-setup-guide-events";
 import { ChartPanel, RankedBars } from "@/components/reseller/ResellerCharts";
 
 type Site = { id: string; name: string };
@@ -97,6 +98,7 @@ export default function ResellerSsidsPage() {
     setShow(false);
     setForm((f) => ({ ...f, ssidName: "", password: "" }));
     void load();
+    notifySetupGuideRefresh();
   }
 
   async function patch(id: string, body: Record<string, unknown>) {
