@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Plus, Search, Router, Wifi, WifiOff, RefreshCw, X, ArrowRight, CircleDot } from "lucide-react";
+import { Loader2, Plus, Search, Router, Wifi, WifiOff, RefreshCw, X, ArrowRight, CircleDot, BookOpen } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 import { notifySetupGuideRefresh } from "@/lib/reseller-setup-guide-events";
 import { ChartPanel, Histogram, StackedStrip } from "@/components/reseller/ResellerCharts";
+import { AddDeviceInformGuideModal } from "@/components/reseller/AddDeviceInformGuideModal";
+import { formatOmadaDeviceNotice } from "@/lib/add-device-inform-guide";
 
 type Site = { id: string; name: string; location: string | null; omadaSiteId?: string | null };
 type DeviceRow = {
@@ -32,6 +34,7 @@ export default function ResellerDevicesPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [omadaNotice, setOmadaNotice] = useState<string | null>(null);
+  const [showInformGuide, setShowInformGuide] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -118,30 +121,16 @@ export default function ResellerDevicesPage() {
         adopted: boolean;
         resolutionNote?: string;
         message?: string;
+        userMessage?: string;
         errorCode?: number;
       };
     };
-    if (d?.omada) {
-      if (!d.omada.siteLinked) {
-        setOmadaNotice(d.omada.message || "This site is not linked to Omada.");
-      } else if (d.omada.adoptAttempted && !d.omada.adopted) {
-        const detail = [d.omada.message, d.omada.errorCode != null ? `errorCode ${d.omada.errorCode}` : ""]
-          .filter(Boolean)
-          .join(" — ");
-        const pre =
-          d.omada.controllerDeviceListed === false
-            ? "Omada did not list this MAC on this site yet — fix Inform URL / discovery first. "
-            : "";
-        setOmadaNotice(
-          pre +
-            (detail
-              ? `Device saved here, but Omada could not adopt it: ${detail}. Check that the AP is online in Omada and the MAC is correct.`
-              : "Device saved here, but Omada could not adopt it. Open Omada Controller and confirm the access point is reachable.")
-        );
-      } else if (d.omada.siteLinkSource && d.omada.siteLinkSource !== "db") {
-        const note = d.omada.resolutionNote ? ` ${d.omada.resolutionNote}` : "";
-        setOmadaNotice(`Site synced to Omada (${d.omada.siteLinkSource}).${note}`.trim());
-      }
+    const friendly = formatOmadaDeviceNotice(d?.omada);
+    if (friendly) {
+      setOmadaNotice(friendly);
+    } else if (d?.omada?.siteLinkSource && d.omada.siteLinkSource !== "db") {
+      const note = d.omada.resolutionNote ? ` ${d.omada.resolutionNote}` : "";
+      setOmadaNotice(`Site synced to Omada (${d.omada.siteLinkSource}).${note}`.trim());
     }
     setShowAdd(false);
     setForm({ name: "", mac: "", siteId: sites[0]?.id || "", type: "AP", deviceUsername: "", devicePassword: "" });
@@ -171,7 +160,7 @@ export default function ResellerDevicesPage() {
           type="button"
           onClick={() => {
             setForm((f) => ({ ...f, siteId: f.siteId || sites[0]?.id || "", deviceUsername: "", devicePassword: "" }));
-            setShowAdd(true);
+            setShowInformGuide(true);
           }}
           className="inline-flex items-center justify-center gap-2 rounded-xl bg-gold px-4 py-2.5 text-sm font-bold text-onyx-950 shadow-lg shadow-gold/20 hover:bg-gold-400 hover:shadow-gold/30 hover:scale-[1.02] active:scale-[0.98] transition-all shrink-0"
         >
@@ -185,8 +174,16 @@ export default function ResellerDevicesPage() {
       )}
 
       {omadaNotice && (
-        <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          {omadaNotice}
+        <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 flex flex-col sm:flex-row sm:items-start gap-3">
+          <p className="flex-1 leading-relaxed">{omadaNotice}</p>
+          <button
+            type="button"
+            onClick={() => setShowInformGuide(true)}
+            className="inline-flex items-center justify-center gap-2 shrink-0 rounded-xl border border-amber-400/40 bg-amber-500/15 px-3 py-2 text-xs font-bold text-amber-100 hover:bg-amber-500/25 transition-colors"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            Angalia mwongozo
+          </button>
         </div>
       )}
 
@@ -420,6 +417,15 @@ export default function ResellerDevicesPage() {
         </div>
       </ChartPanel>
 
+      <AddDeviceInformGuideModal
+        open={showInformGuide}
+        onClose={() => setShowInformGuide(false)}
+        onComplete={() => {
+          setShowInformGuide(false);
+          setShowAdd(true);
+        }}
+      />
+
       {/* ── Add device modal ── */}
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
@@ -437,10 +443,8 @@ export default function ResellerDevicesPage() {
               <h2 className="text-lg font-bold text-white">Add device</h2>
             </div>
             <p className="text-xs text-onyx-400 mb-5">
-              MAC: AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF (from the AP Status page or Omada Pending list). The AP must
-              appear under this Omada site as Pending before adopt succeeds. If the AP’s tplinkeap.net username/password
-              were changed, enter them below so Omada can adopt (same as the controller popup). If you hit a device limit (HTTP 402),
-              upgrade your platform plan under Settings.
+              Weka Inform URL kwenye AP kwanza (mwongozo uliouona). Kisha ingiza MAC kutoka Status ya AP. Ikiwa
+              umebadilisha login ya tplinkeap.net, weka hapa chini. Kikomo cha plan: Settings.
             </p>
             <form onSubmit={addDevice} className="space-y-4">
               <div>

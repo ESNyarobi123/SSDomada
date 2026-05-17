@@ -3,6 +3,7 @@ import { prisma } from "@/server/lib/prisma";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { paginationSchema, addDeviceSchema } from "@/lib/validations/reseller";
 import { OmadaService, type OmadaSiteLinkSource } from "@/server/services/omada.service";
+import { buildInformUrlPendingUserMessage } from "@/lib/add-device-inform-guide";
 import { ensureActiveResellerPlan, ensureCapacity } from "@/server/middleware/paywall";
 
 /**
@@ -152,6 +153,7 @@ export async function POST(req: NextRequest) {
       adopted: boolean;
       resolutionNote?: string;
       message?: string;
+      userMessage?: string;
       errorCode?: number;
     } = {
       siteLinked: Boolean(omadaSiteId),
@@ -172,9 +174,10 @@ export async function POST(req: NextRequest) {
       omada.controllerDeviceListed = Boolean(preview);
 
       if (!preview) {
-        const hint =
-          "Omada does not list this MAC on this site yet. Use the AP’s local page (e.g. tplinkeap.net → System → Controller Settings) to set the Controller Inform URL, or fix L2 discovery until the AP appears Pending under this Omada site.";
-        omada.resolutionNote = omada.resolutionNote ? `${omada.resolutionNote} ${hint}` : hint;
+        omada.userMessage = buildInformUrlPendingUserMessage();
+        omada.resolutionNote = omada.resolutionNote
+          ? `${omada.resolutionNote} Inform URL not configured on AP.`
+          : "Inform URL not configured on AP.";
       }
 
       omada.adoptAttempted = true;
@@ -188,6 +191,11 @@ export async function POST(req: NextRequest) {
       if (!adoptRes.adopted) {
         omada.message = adoptRes.message;
         omada.errorCode = adoptRes.errorCode;
+        if (!omada.userMessage) {
+          omada.userMessage = preview
+            ? "Device imehifadhiwa lakini Omada haijai-adopt bado. Hakikisha AP iko online na Inform URL imewekwa, kisha jaribu tena."
+            : buildInformUrlPendingUserMessage();
+        }
       }
       const live = await OmadaService.findDeviceByMac(omadaSiteId, validated.mac);
       if (live) {
