@@ -1,4 +1,5 @@
 import { prisma } from "@/server/lib/prisma";
+import { detectTanzaniaMobileProvider, normalizeTanzaniaPhone } from "@/lib/tanzania-mobile";
 import { SnippeService } from "./snippe.service";
 import {
   computeInitialSubscriptionState,
@@ -7,6 +8,8 @@ import {
   getPlanAccessSnapshot,
   planDaysRemaining,
 } from "./reseller-plan-access.service";
+
+export type ResellerPlanPaymentMethod = "MOBILE" | "CARD" | "WALLET";
 
 /**
  * RESELLER PLAN SERVICE
@@ -138,8 +141,10 @@ export class ResellerPlanService {
   static async subscribe(opts: {
     resellerId: string;
     planId: string;
+    paymentMethod?: ResellerPlanPaymentMethod;
     customerPhone?: string;
     callbackUrl: string;
+    cancelUrl?: string;
     webhookUrl: string;
   }) {
     const plan = await (prisma as any).resellerPlan.findUnique({
@@ -177,41 +182,159 @@ export class ResellerPlanService {
       return { subscription: sub, checkoutUrl: null, requiresPayment: false };
     }
 
-    // Paid flow — create Snippe payment session (hosted checkout)
+    if (!opts.paymentMethod) {
+      throw new Error("Choose how to pay: mobile money, card, or wallet balance.");
+    }
+
     const idempotencyKey = SnippeService.generateIdempotencyKey("plan");
     const reseller = await prisma.reseller.findUnique({
       where: { id: opts.resellerId },
-      include: { user: { select: { email: true, name: true } } },
+      include: { user: { select: { email: true, name: true, phone: true } } },
     });
     if (!reseller) throw new Error("Reseller not found");
 
+    const customer = {
+      name: reseller.user.name || reseller.companyName,
+      phone: opts.customerPhone || reseller.phone || reseller.user.phone || undefined,
+      email: reseller.user.email,
+    };
+
+    const metadata = {
+      type: "reseller_plan",
+      resellerId: opts.resellerId,
+      planId: plan.id,
+      idempotencyKey,
+    };
+
+    // Pay from WiFi earnings wallet (no Snippe).
+    if (opts.paymentMethod === "WALLET") {
+      const sub = await prisma.$transaction(async (tx) => {
+        const row = await tx.reseller.findUnique({
+          where: { id: opts.resellerId },
+          select: { walletBalance: true, currency: true },
+        });
+        if (!row) throw new Error("Reseller not found");
+        if (row.walletBalance < plan.price) {
+          throw new Error(
+            `Insufficient wallet balance. Available: ${row.walletBalance.toLocaleString()} ${row.currency}, required: ${plan.price.toLocaleString()} ${plan.currency}.`,
+          );
+        }
+
+        await tx.reseller.update({
+          where: { id: opts.resellerId },
+          data: { walletBalance: { decrement: plan.price } },
+        });
+
+        const now = new Date();
+        const periodEnd = computePlanPeriodEnd(plan, now);
+        return (tx as any).resellerPlanSubscription.upsert({
+          where: { resellerId: opts.resellerId },
+          update: {
+            planId: plan.id,
+            status: "ACTIVE",
+            startedAt: now,
+            currentPeriodEnd: periodEnd,
+            trialEndsAt: null,
+            cancelledAt: null,
+            cancelAtPeriodEnd: false,
+            lastPaymentRef: `wallet_${idempotencyKey}`,
+            lastPaymentAt: now,
+          },
+          create: {
+            resellerId: opts.resellerId,
+            planId: plan.id,
+            status: "ACTIVE",
+            startedAt: now,
+            currentPeriodEnd: periodEnd,
+            lastPaymentRef: `wallet_${idempotencyKey}`,
+            lastPaymentAt: now,
+          },
+          include: { plan: true },
+        });
+      });
+
+      return {
+        subscription: sub,
+        checkoutUrl: null,
+        requiresPayment: false,
+        polling: false,
+        paymentReference: null,
+      };
+    }
+
+    // Mobile money — STK push to phone (same pattern as captive portal).
+    if (opts.paymentMethod === "MOBILE") {
+      const phone = normalizeTanzaniaPhone(opts.customerPhone || customer.phone || "");
+      if (!phone) throw new Error("Phone number is required for mobile money payment");
+      if (!detectTanzaniaMobileProvider(phone)) {
+        throw new Error(
+          "Could not detect mobile money provider. Use a Tanzanian Airtel, M-Pesa, Mixx, or Halotel number.",
+        );
+      }
+
+      const snippe = await SnippeService.createPayment(
+        {
+          amount: plan.price,
+          currency: plan.currency,
+          paymentType: "mobile",
+          phone,
+          description: `SSDomada ${plan.name} (${plan.interval.toLowerCase()})`,
+          customer,
+          webhookUrl: opts.webhookUrl,
+          metadata,
+        },
+        idempotencyKey,
+      );
+
+      if (!snippe.success || !snippe.reference) {
+        throw new Error(snippe.message || "Mobile payment could not be started");
+      }
+
+      const sub = await (prisma as any).resellerPlanSubscription.upsert({
+        where: { resellerId: opts.resellerId },
+        update: {
+          planId: plan.id,
+          status: "PAST_DUE",
+          lastPaymentRef: snippe.reference,
+        },
+        create: {
+          resellerId: opts.resellerId,
+          planId: plan.id,
+          status: "PAST_DUE",
+          currentPeriodEnd: end,
+          lastPaymentRef: snippe.reference,
+        },
+        include: { plan: true },
+      });
+
+      return {
+        subscription: sub,
+        checkoutUrl: null,
+        requiresPayment: true,
+        polling: true,
+        paymentReference: snippe.reference,
+      };
+    }
+
+    // Card — hosted Snippe checkout (card only).
     const snippe = await SnippeService.createSession(
       {
         amount: plan.price,
         currency: plan.currency,
         description: `SSDomada ${plan.name} (${plan.interval.toLowerCase()})`,
-        customer: {
-          name: reseller.user.name || reseller.companyName,
-          phone: opts.customerPhone || reseller.phone || undefined,
-          email: reseller.user.email,
-        },
+        customer,
         redirectUrl: opts.callbackUrl,
         webhookUrl: opts.webhookUrl,
-        metadata: {
-          type: "reseller_plan",
-          resellerId: opts.resellerId,
-          planId: plan.id,
-          idempotencyKey,
-        },
+        allowedMethods: ["card"],
+        metadata,
       },
       idempotencyKey,
     );
 
     if (!snippe.success || !snippe.reference) {
-      throw new Error(snippe.message || "Payment init failed");
+      throw new Error(snippe.message || "Card checkout could not be started");
     }
 
-    // Pre-create pending subscription with PAST_DUE → flip to ACTIVE in webhook
     const sub = await (prisma as any).resellerPlanSubscription.upsert({
       where: { resellerId: opts.resellerId },
       update: {
@@ -223,24 +346,40 @@ export class ResellerPlanService {
         resellerId: opts.resellerId,
         planId: plan.id,
         status: "PAST_DUE",
-        currentPeriodEnd: end, // will be reset on activation
+        currentPeriodEnd: end,
         lastPaymentRef: snippe.reference,
       },
+      include: { plan: true },
     });
 
-    return { subscription: sub, checkoutUrl: snippe.checkoutUrl, requiresPayment: true };
+    return {
+      subscription: sub,
+      checkoutUrl: snippe.checkoutUrl,
+      requiresPayment: true,
+      polling: false,
+      paymentReference: snippe.reference,
+    };
   }
 
   /** Billing + paywall snapshot for dashboard sidebar and plan picker. */
   static async getBillingAccess(resellerId: string) {
-    const [usage, accessSnapshot] = await Promise.all([
+    const [usage, accessSnapshot, reseller] = await Promise.all([
       this.computeUsage(resellerId),
       getPlanAccessSnapshot(resellerId),
+      prisma.reseller.findUnique({
+        where: { id: resellerId },
+        select: { walletBalance: true, currency: true, phone: true, user: { select: { phone: true } } },
+      }),
     ]);
     const sub = usage.subscription;
     const access = accessSnapshot.access;
     return {
       ...usage,
+      wallet: {
+        balance: reseller?.walletBalance ?? 0,
+        currency: reseller?.currency ?? "TZS",
+      },
+      defaultPhone: reseller?.phone || reseller?.user?.phone || null,
       features: accessSnapshot.features,
       access: {
         ok: access.ok,

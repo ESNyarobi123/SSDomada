@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { verifyReseller, apiSuccess, apiError, logResellerAction, getClientIp } from "@/server/middleware/reseller-auth";
 import { ResellerPlanService } from "@/server/services/reseller-plan.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
+import { resellerBillingSubscribeSchema } from "@/lib/validations/reseller";
 
 /**
  * GET /api/v1/reseller/billing
@@ -42,14 +43,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "subscribe") {
-      if (!body.planId) return apiError("planId is required", 400, "VALIDATION");
+      const parsed = resellerBillingSubscribeSchema.safeParse(body);
+      if (!parsed.success) {
+        const msg = parsed.error.issues.map((i) => i.message).join("; ") || "Invalid request";
+        return apiError(msg, 422, "VALIDATION_ERROR");
+      }
 
       const baseUrl = getPortalPublicBaseUrl();
       const result = await ResellerPlanService.subscribe({
         resellerId: ctx.resellerId,
-        planId: body.planId,
-        customerPhone: body.phone,
+        planId: parsed.data.planId,
+        paymentMethod: parsed.data.paymentMethod,
+        customerPhone: parsed.data.phone,
         callbackUrl: `${baseUrl}/reseller/plan?billing=success`,
+        cancelUrl: `${baseUrl}/reseller/plan?billing=cancelled`,
         webhookUrl: `${baseUrl}/api/webhooks/snippe`,
       });
 
@@ -58,7 +65,11 @@ export async function POST(req: NextRequest) {
         "billing.subscribe",
         "ResellerPlanSubscription",
         result.subscription.id,
-        { planId: body.planId, requiresPayment: result.requiresPayment },
+        {
+          planId: parsed.data.planId,
+          paymentMethod: parsed.data.paymentMethod,
+          requiresPayment: result.requiresPayment,
+        },
         getClientIp(req),
       );
 

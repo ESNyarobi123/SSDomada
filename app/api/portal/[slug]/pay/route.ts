@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/server/lib/prisma";
 import { PaymentService } from "@/server/services/payment.service";
 import { getPortalPublicBaseUrl } from "@/server/lib/public-app-base-url";
-import type { SnippeMobileProvider } from "@/server/services/snippe.service";
+import { detectTanzaniaMobileProvider } from "@/lib/tanzania-mobile";
 import { checkCapacity } from "@/server/services/reseller-plan-access.service";
 
 interface RouteParams {
@@ -175,7 +175,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     }
 
     // MOBILE money — direct STK push, user stays on the portal page.
-    const provider = detectProvider(normalizedPhone);
+    const provider = detectTanzaniaMobileProvider(normalizedPhone);
     if (!provider) {
       return NextResponse.json(
         {
@@ -268,14 +268,3 @@ function buildSuccessRedirect(slug: string, sessionId: string): string {
   return base ? `${base}${path}` : path;
 }
 
-function detectProvider(phone: string): SnippeMobileProvider | undefined {
-  const digits = phone.replace(/[^0-9]/g, "");
-  const local = digits.slice(-9);
-  if (local.length < 9) return undefined;
-  const prefix = local.slice(0, 2);
-  if (["68", "69", "78"].includes(prefix)) return "airtel";
-  if (["74", "75", "76"].includes(prefix)) return "mpesa";
-  if (["65", "67", "71"].includes(prefix)) return "mixx";
-  if (["61", "62"].includes(prefix)) return "halotel";
-  return undefined;
-}

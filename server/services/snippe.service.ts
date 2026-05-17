@@ -238,7 +238,7 @@ export class SnippeService {
     const body = {
       amount: Math.round(input.amount),
       currency: input.currency || "TZS",
-      allowed_methods: input.allowedMethods || ["mobile_money", "qr", "card"],
+      allowed_methods: input.allowedMethods || ["mobile_money", "card"],
       customer: input.customer ? cleanCustomer(input.customer) : undefined,
       redirect_url: input.redirectUrl,
       webhook_url: input.webhookUrl,

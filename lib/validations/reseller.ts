@@ -210,6 +210,13 @@ export const updateProfileSchema = z.object({
 // Change Password
 // ============================================================
 
+export const resellerBillingSubscribeSchema = z.object({
+  action: z.literal("subscribe"),
+  planId: z.string().cuid(),
+  paymentMethod: z.enum(["MOBILE", "CARD", "WALLET"]).optional(),
+  phone: z.string().min(9).max(20).optional(),
+});
+
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
   newPassword: z.string().min(8).max(128),

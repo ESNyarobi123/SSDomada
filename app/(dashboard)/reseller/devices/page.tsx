@@ -242,33 +242,6 @@ export default function ResellerDevicesPage() {
         </div>
       </div>
 
-      {/* ── Chart ── */}
-      <ChartPanel
-        title="Fleet snapshot"
-        subtitle="Online, offline, and pending access points."
-      >
-        <StackedStrip
-          segments={[
-            { key: "on", value: summary.online, className: "bg-emerald-500", label: "Online" },
-            { key: "off", value: summary.offline, className: "bg-amber-500", label: "Offline" },
-            { key: "pend", value: summary.pending, className: "bg-sky-500", label: "Pending" },
-          ]}
-        />
-        <div className="mt-8 pt-6 border-t border-white/[0.06]">
-          <p className="text-xs font-bold uppercase tracking-wider text-onyx-400 mb-3">Histogram · same totals</p>
-          <Histogram
-            variant="emerald"
-            barHeightPx={100}
-            formatValue={(n) => `${Math.round(n)}`}
-            items={[
-              { label: "On", value: summary.online, title: `Online: ${summary.online}` },
-              { label: "Off", value: summary.offline, title: `Offline: ${summary.offline}` },
-              { label: "Pend", value: summary.pending, title: `Pending: ${summary.pending}` },
-            ]}
-          />
-        </div>
-      </ChartPanel>
-
       {/* ── Filters ── */}
       <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
         <div className="relative flex-1 max-w-md">
@@ -419,6 +392,33 @@ export default function ResellerDevicesPage() {
           </div>
         )}
       </div>
+
+      {/* ── Chart ── */}
+      <ChartPanel
+        title="Fleet snapshot"
+        subtitle="Online, offline, and pending access points."
+      >
+        <StackedStrip
+          segments={[
+            { key: "on", value: summary.online, className: "bg-emerald-500", label: "Online" },
+            { key: "off", value: summary.offline, className: "bg-amber-500", label: "Offline" },
+            { key: "pend", value: summary.pending, className: "bg-sky-500", label: "Pending" },
+          ]}
+        />
+        <div className="mt-8 pt-6 border-t border-white/[0.06]">
+          <p className="text-xs font-bold uppercase tracking-wider text-onyx-400 mb-3">Histogram · same totals</p>
+          <Histogram
+            variant="emerald"
+            barHeightPx={100}
+            formatValue={(n) => `${Math.round(n)}`}
+            items={[
+              { label: "On", value: summary.online, title: `Online: ${summary.online}` },
+              { label: "Off", value: summary.offline, title: `Offline: ${summary.offline}` },
+              { label: "Pend", value: summary.pending, title: `Pending: ${summary.pending}` },
+            ]}
+          />
+        </div>
+      </ChartPanel>
 
       {/* ── Add device modal ── */}
       {showAdd && (
