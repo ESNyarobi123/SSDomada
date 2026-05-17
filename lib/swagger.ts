@@ -1,3 +1,5 @@
+import { adminExtraPaths } from "./swagger-admin-extra";
+
 /**
  * OpenAPI/Swagger specification for SSDomada Admin API
  */
@@ -374,5 +376,6 @@ export const swaggerSpec = {
         responses: { "200": { description: "Audit logs with user info" } },
       },
     },
+    ...adminExtraPaths,
   },
 };

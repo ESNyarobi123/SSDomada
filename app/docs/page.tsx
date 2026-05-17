@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 export default function SwaggerDocsPage() {
-  const [activeTab, setActiveTab] = useState<"reseller" | "admin" | "portal">("reseller");
+  const [activeTab, setActiveTab] = useState<"reseller" | "admin" | "portal" | "platform">("reseller");
 
   useEffect(() => {
     // Load Swagger UI CSS
@@ -35,6 +35,7 @@ export default function SwaggerDocsPage() {
       reseller: "/api/v1/reseller/docs",
       admin: "/api/v1/admin/docs",
       portal: "/api/docs/portal",
+      platform: "/api/docs/platform",
     };
 
     if (typeof window !== "undefined" && (window as any).SwaggerUIBundle) {
@@ -86,9 +87,10 @@ export default function SwaggerDocsPage() {
           {/* Tabs */}
           <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
             {[
-              { id: "reseller" as const, label: "Reseller API", icon: "🏪", desc: "Dashboard, Devices, Packages, Clients, Payments" },
-              { id: "admin" as const, label: "Admin API", icon: "👑", desc: "System Management, Resellers, Payouts" },
-              { id: "portal" as const, label: "Portal API", icon: "📶", desc: "Captive Portal, RADIUS, Webhooks" },
+              { id: "reseller" as const, label: "Reseller API", icon: "🏪" },
+              { id: "admin" as const, label: "Admin API", icon: "👑" },
+              { id: "portal" as const, label: "Portal & Cron", icon: "📶" },
+              { id: "platform" as const, label: "Auth & Public", icon: "🔐" },
             ].map((tab) => (
               <button
                 key={tab.id}

@@ -1,3 +1,5 @@
+import { resellerExtraPaths } from "./swagger-reseller-extra";
+
 /**
  * OpenAPI/Swagger specification for SSDomada Reseller API
  */
@@ -626,5 +628,6 @@ export const resellerSwaggerSpec = {
         responses: { "200": { description: "Settings updated" } },
       },
     },
+    ...resellerExtraPaths,
   },
 };

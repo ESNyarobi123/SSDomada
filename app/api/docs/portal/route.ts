@@ -259,6 +259,16 @@ const spec = {
       },
     },
     "/api/cron/radius-expire": {
+      get: {
+        tags: ["Cron"],
+        summary: "Expire stale RADIUS credentials (GET)",
+        description: "Same as POST. Protected by CRON_SECRET.",
+        security: [],
+        parameters: [
+          { name: "Authorization", in: "header", schema: { type: "string" }, description: "Bearer {CRON_SECRET}" },
+        ],
+        responses: { "200": { description: "Expiration result" } },
+      },
       post: {
         tags: ["Cron"],
         summary: "Expire stale RADIUS credentials",
@@ -282,6 +292,25 @@ const spec = {
             },
           },
         },
+      },
+    },
+    "/api/cron/sync-omada": {
+      get: {
+        tags: ["Cron"],
+        summary: "Sync Omada devices and enforce access",
+        description: "Protected by CRON_SECRET.",
+        security: [],
+        parameters: [
+          { name: "Authorization", in: "header", schema: { type: "string" }, description: "Bearer {CRON_SECRET}" },
+        ],
+        responses: { "200": { description: "Sync stats" } },
+      },
+    },
+    "/api/docs/portal": {
+      get: {
+        tags: ["Meta"],
+        summary: "OpenAPI JSON (this document)",
+        responses: { "200": { description: "OpenAPI spec" } },
       },
     },
   },
