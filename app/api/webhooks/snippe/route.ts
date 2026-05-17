@@ -67,8 +67,9 @@ export async function POST(req: NextRequest) {
         event.type === "payment.voided" ||
         event.type === "payment.expired"
       ) {
-        if (!isResellerPlan) {
-          // For reseller plans: subscription stays PAST_DUE until paid; surfaced in UI.
+        if (isResellerPlan) {
+          await ResellerPlanService.handlePaymentFailed(event.reference);
+        } else {
           await PaymentService.handleWebhook(event);
         }
       } else {

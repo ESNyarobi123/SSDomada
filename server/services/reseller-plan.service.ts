@@ -11,6 +11,59 @@ import {
 
 export type ResellerPlanPaymentMethod = "MOBILE" | "CARD" | "WALLET";
 
+const PENDING_PLAN_CHECKOUT_KIND = "pending_plan_checkout" as const;
+
+type PendingPlanCheckoutSnapshot = {
+  kind: typeof PENDING_PLAN_CHECKOUT_KIND;
+  targetPlanId: string;
+  paymentReference: string;
+  previous: {
+    planId: string;
+    status: string;
+    startedAt: string;
+    currentPeriodEnd: string;
+    trialEndsAt: string | null;
+    cancelledAt: string | null;
+    cancelAtPeriodEnd: boolean;
+  } | null;
+};
+
+function parsePendingCheckout(snapshotJson: unknown): PendingPlanCheckoutSnapshot | null {
+  if (!snapshotJson || typeof snapshotJson !== "object") return null;
+  const s = snapshotJson as PendingPlanCheckoutSnapshot;
+  if (s.kind !== PENDING_PLAN_CHECKOUT_KIND || !s.targetPlanId || !s.paymentReference) return null;
+  return s;
+}
+
+function subscriptionStillEntitled(sub: {
+  status: string;
+  currentPeriodEnd: Date | string | null;
+}): boolean {
+  if (!["ACTIVE", "TRIAL"].includes(sub.status)) return false;
+  if (!sub.currentPeriodEnd) return true;
+  return new Date(sub.currentPeriodEnd) >= new Date();
+}
+
+function snapshotFromSubscription(sub: {
+  planId: string;
+  status: string;
+  startedAt: Date;
+  currentPeriodEnd: Date;
+  trialEndsAt: Date | null;
+  cancelledAt: Date | null;
+  cancelAtPeriodEnd: boolean;
+}): PendingPlanCheckoutSnapshot["previous"] {
+  return {
+    planId: sub.planId,
+    status: sub.status,
+    startedAt: sub.startedAt.toISOString(),
+    currentPeriodEnd: sub.currentPeriodEnd.toISOString(),
+    trialEndsAt: sub.trialEndsAt?.toISOString() ?? null,
+    cancelledAt: sub.cancelledAt?.toISOString() ?? null,
+    cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+  };
+}
+
 /**
  * RESELLER PLAN SERVICE
  *
@@ -290,21 +343,11 @@ export class ResellerPlanService {
         throw new Error(snippe.message || "Mobile payment could not be started");
       }
 
-      const sub = await (prisma as any).resellerPlanSubscription.upsert({
-        where: { resellerId: opts.resellerId },
-        update: {
-          planId: plan.id,
-          status: "PAST_DUE",
-          lastPaymentRef: snippe.reference,
-        },
-        create: {
-          resellerId: opts.resellerId,
-          planId: plan.id,
-          status: "PAST_DUE",
-          currentPeriodEnd: end,
-          lastPaymentRef: snippe.reference,
-        },
-        include: { plan: true },
+      const sub = await this.recordPendingPlanCheckout({
+        resellerId: opts.resellerId,
+        targetPlan: plan,
+        paymentReference: snippe.reference,
+        fallbackPeriodEnd: end,
       });
 
       return {
@@ -335,21 +378,11 @@ export class ResellerPlanService {
       throw new Error(snippe.message || "Card checkout could not be started");
     }
 
-    const sub = await (prisma as any).resellerPlanSubscription.upsert({
-      where: { resellerId: opts.resellerId },
-      update: {
-        planId: plan.id,
-        status: "PAST_DUE",
-        lastPaymentRef: snippe.reference,
-      },
-      create: {
-        resellerId: opts.resellerId,
-        planId: plan.id,
-        status: "PAST_DUE",
-        currentPeriodEnd: end,
-        lastPaymentRef: snippe.reference,
-      },
-      include: { plan: true },
+    const sub = await this.recordPendingPlanCheckout({
+      resellerId: opts.resellerId,
+      targetPlan: plan,
+      paymentReference: snippe.reference,
+      fallbackPeriodEnd: end,
     });
 
     return {
@@ -359,6 +392,106 @@ export class ResellerPlanService {
       polling: false,
       paymentReference: snippe.reference,
     };
+  }
+
+  /**
+   * While checkout is in progress, keep an active trial/plan on the books.
+   * Only switch to PAST_DUE when the reseller has no current entitlement.
+   */
+  private static async recordPendingPlanCheckout(opts: {
+    resellerId: string;
+    targetPlan: { id: string; interval: string };
+    paymentReference: string;
+    fallbackPeriodEnd: Date;
+  }) {
+    const existing = await (prisma as any).resellerPlanSubscription.findUnique({
+      where: { resellerId: opts.resellerId },
+    });
+
+    const pendingSnapshot: PendingPlanCheckoutSnapshot = {
+      kind: PENDING_PLAN_CHECKOUT_KIND,
+      targetPlanId: opts.targetPlan.id,
+      paymentReference: opts.paymentReference,
+      previous: existing && subscriptionStillEntitled(existing) ? snapshotFromSubscription(existing) : null,
+    };
+
+    if (pendingSnapshot.previous) {
+      return (prisma as any).resellerPlanSubscription.update({
+        where: { resellerId: opts.resellerId },
+        data: {
+          lastPaymentRef: opts.paymentReference,
+          snapshotJson: pendingSnapshot,
+        },
+        include: { plan: true },
+      });
+    }
+
+    return (prisma as any).resellerPlanSubscription.upsert({
+      where: { resellerId: opts.resellerId },
+      update: {
+        planId: opts.targetPlan.id,
+        status: "PAST_DUE",
+        lastPaymentRef: opts.paymentReference,
+        snapshotJson: pendingSnapshot,
+      },
+      create: {
+        resellerId: opts.resellerId,
+        planId: opts.targetPlan.id,
+        status: "PAST_DUE",
+        currentPeriodEnd: opts.fallbackPeriodEnd,
+        lastPaymentRef: opts.paymentReference,
+        snapshotJson: pendingSnapshot,
+      },
+      include: { plan: true },
+    });
+  }
+
+  /**
+   * Cancel an in-flight plan checkout and restore the previous trial/subscription.
+   */
+  static async abandonPendingCheckout(resellerId: string, paymentReference?: string) {
+    const sub = await (prisma as any).resellerPlanSubscription.findUnique({
+      where: { resellerId },
+    });
+    if (!sub) return { restored: false };
+
+    const pending = parsePendingCheckout(sub.snapshotJson);
+    if (paymentReference && sub.lastPaymentRef && sub.lastPaymentRef !== paymentReference) {
+      return { restored: false, reason: "reference_mismatch" as const };
+    }
+    if (!pending && sub.status !== "PAST_DUE") {
+      return { restored: false, reason: "nothing_pending" as const };
+    }
+
+    if (pending?.previous) {
+      const prev = pending.previous;
+      await (prisma as any).resellerPlanSubscription.update({
+        where: { resellerId },
+        data: {
+          planId: prev.planId,
+          status: prev.status,
+          startedAt: new Date(prev.startedAt),
+          currentPeriodEnd: new Date(prev.currentPeriodEnd),
+          trialEndsAt: prev.trialEndsAt ? new Date(prev.trialEndsAt) : null,
+          cancelledAt: prev.cancelledAt ? new Date(prev.cancelledAt) : null,
+          cancelAtPeriodEnd: prev.cancelAtPeriodEnd,
+          lastPaymentRef: null,
+          snapshotJson: null,
+        },
+      });
+      return { restored: true };
+    }
+
+    if (sub.status === "PAST_DUE") {
+      await (prisma as any).resellerPlanSubscription.delete({ where: { resellerId } });
+      return { restored: true, cleared: true as const };
+    }
+
+    await (prisma as any).resellerPlanSubscription.update({
+      where: { resellerId },
+      data: { lastPaymentRef: null, snapshotJson: null },
+    });
+    return { restored: true };
   }
 
   /** Billing + paywall snapshot for dashboard sidebar and plan picker. */
@@ -423,20 +556,39 @@ export class ResellerPlanService {
     });
     if (!sub) return null;
 
+    const pending = parsePendingCheckout(sub.snapshotJson);
+    const targetPlanId = pending?.targetPlanId ?? sub.planId;
+    const targetPlan =
+      targetPlanId === sub.planId
+        ? sub.plan
+        : await (prisma as any).resellerPlan.findUnique({ where: { id: targetPlanId } });
+    if (!targetPlan) return null;
+
     const now = new Date();
-    const end = new Date(now);
-    if (sub.plan.interval === "MONTHLY") end.setMonth(end.getMonth() + 1);
-    else if (sub.plan.interval === "YEARLY") end.setFullYear(end.getFullYear() + 1);
-    else if (sub.plan.interval === "LIFETIME") end.setFullYear(end.getFullYear() + 100);
+    const end = computePlanPeriodEnd(targetPlan, now);
 
     return (prisma as any).resellerPlanSubscription.update({
       where: { id: sub.id },
       data: {
+        planId: targetPlan.id,
         status: "ACTIVE",
         startedAt: now,
         currentPeriodEnd: end,
+        trialEndsAt: null,
+        cancelledAt: null,
+        cancelAtPeriodEnd: false,
         lastPaymentAt: now,
+        snapshotJson: null,
       },
     });
+  }
+
+  static async handlePaymentFailed(reference: string) {
+    const sub = await (prisma as any).resellerPlanSubscription.findFirst({
+      where: { lastPaymentRef: reference },
+      select: { resellerId: true },
+    });
+    if (!sub) return null;
+    return this.abandonPendingCheckout(sub.resellerId, reference);
   }
 }

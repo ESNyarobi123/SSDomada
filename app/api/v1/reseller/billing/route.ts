@@ -42,6 +42,22 @@ export async function POST(req: NextRequest) {
       return apiSuccess(sub);
     }
 
+    if (action === "abandon_checkout") {
+      const result = await ResellerPlanService.abandonPendingCheckout(
+        ctx.resellerId,
+        typeof body?.paymentReference === "string" ? body.paymentReference : undefined,
+      );
+      await logResellerAction(
+        ctx.userId,
+        "billing.checkout_abandoned",
+        "ResellerPlanSubscription",
+        ctx.resellerId,
+        result,
+        getClientIp(req),
+      );
+      return apiSuccess(result);
+    }
+
     if (action === "subscribe") {
       const parsed = resellerBillingSubscribeSchema.safeParse(body);
       if (!parsed.success) {

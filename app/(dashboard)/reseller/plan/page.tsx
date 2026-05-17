@@ -49,6 +49,7 @@ function PlanPickerContent() {
   const manage = searchParams.get("manage") === "1";
   const expired = searchParams.get("expired") === "1";
   const billingSuccess = searchParams.get("billing") === "success";
+  const billingCancelled = searchParams.get("billing") === "cancelled";
   const requestedSlug = searchParams.get("plan")?.trim().toLowerCase() || "";
 
   const [plans, setPlans] = useState<PublicResellerPlan[]>([]);
@@ -93,6 +94,36 @@ function PlanPickerContent() {
       setOk("Payment received. Your plan is active — welcome to your dashboard.");
     }
   }, [billingSuccess, billing?.access.ok]);
+
+  useEffect(() => {
+    if (!billingCancelled) return;
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/v1/reseller/billing", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+        },
+        body: JSON.stringify({ action: "abandon_checkout" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (cancelled) return;
+      await load();
+      if (json.data?.restored) {
+        setOk("Payment cancelled. Your current plan (including trial) is unchanged.");
+        router.replace("/reseller/dashboard");
+        router.refresh();
+      } else {
+        setErr(null);
+        setOk("Payment cancelled.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [billingCancelled, load, router]);
 
   function openCheckout(plan: PublicResellerPlan) {
     setErr(null);
@@ -153,7 +184,18 @@ function PlanPickerContent() {
         }
       }
       setMobileWaiting(false);
-      setErr("Payment not confirmed yet. If you already paid, wait a moment and refresh this page.");
+      await fetch("/api/v1/reseller/billing", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+        },
+        body: JSON.stringify({ action: "abandon_checkout" }),
+      });
+      await load();
+      setCheckoutPlan(null);
+      setErr("Payment not confirmed. Your trial or current plan is unchanged — try again when ready.");
       return false;
     }
 
@@ -255,7 +297,7 @@ function PlanPickerContent() {
         </div>
       )}
 
-      {billing?.subscription?.status === "PAST_DUE" && (
+      {billing?.subscription?.status === "PAST_DUE" && !billing.access.ok && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
           Payment pending — complete checkout for <strong className="text-white">{billing.subscription.plan.name}</strong> or
           choose another plan.
