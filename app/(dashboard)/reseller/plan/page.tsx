@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ import {
   Smartphone,
   Wallet,
   X,
+  Clock,
 } from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
 import {
@@ -31,9 +32,18 @@ type BillingPayload = ResellerBillingSidebar & {
   } | null;
   wallet?: { balance: number; currency: string };
   defaultPhone?: string | null;
+  pendingCheckout?: { targetPlanId: string; paymentReference: string } | null;
 };
 
 type PlanPaymentMethod = "MOBILE" | "CARD" | "WALLET";
+
+type PaymentWaitState = {
+  planId: string;
+  planName: string;
+  price: number;
+  phone: string;
+  paymentReference?: string;
+};
 
 function formatTzs(amount: number) {
   return `${amount.toLocaleString()} TZS`;
@@ -41,6 +51,13 @@ function formatTzs(amount: number) {
 
 function needsPaidCheckout(plan: PublicResellerPlan) {
   return plan.price > 0 && plan.trialDays <= 0;
+}
+
+function planPaymentSettled(billing: BillingPayload, targetPlanId: string): boolean {
+  const sub = billing.subscription;
+  if (!sub) return false;
+  if (billing.pendingCheckout) return false;
+  return sub.plan?.id === targetPlanId && sub.status === "ACTIVE";
 }
 
 function PlanPickerContent() {
@@ -61,11 +78,13 @@ function PlanPickerContent() {
   const [checkoutPlan, setCheckoutPlan] = useState<PublicResellerPlan | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PlanPaymentMethod>("MOBILE");
   const [phone, setPhone] = useState("");
-  const [mobileWaiting, setMobileWaiting] = useState(false);
+  const [paymentWait, setPaymentWait] = useState<PaymentWaitState | null>(null);
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  const pollStartedAt = useRef<number | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    if (!opts?.silent) setErr(null);
     const [plansRes, billRes] = await Promise.all([
       fetch("/api/v1/plans").then((r) => r.json()),
       resellerJson<BillingPayload>("/api/v1/reseller/billing"),
@@ -73,21 +92,22 @@ function PlanPickerContent() {
     if (plansRes.success && Array.isArray(plansRes.data)) setPlans(plansRes.data);
     if (billRes.ok && billRes.data) {
       setBilling(billRes.data);
-      if (billRes.data.defaultPhone) setPhone(billRes.data.defaultPhone);
-    } else if (!billRes.ok) setErr(billRes.error || "Could not load your subscription");
-    setLoading(false);
-  }, []);
+      if (billRes.data.defaultPhone && !phone) setPhone(billRes.data.defaultPhone);
+    } else if (!billRes.ok && !opts?.silent) setErr(billRes.error || "Could not load your subscription");
+    if (!opts?.silent) setLoading(false);
+  }, [phone]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  // Do not redirect to dashboard while user is paying or on manage/expired flows.
   useEffect(() => {
-    if (loading || !billing) return;
-    if (billing.access.ok && !manage && !billingSuccess) {
+    if (loading || !billing || paymentWait || billing.pendingCheckout) return;
+    if (billing.access.ok && !manage && !billingSuccess && !expired) {
       router.replace("/reseller/dashboard");
     }
-  }, [loading, billing, manage, billingSuccess, router]);
+  }, [loading, billing, manage, billingSuccess, expired, paymentWait, router]);
 
   useEffect(() => {
     if (billingSuccess && billing?.access.ok) {
@@ -110,13 +130,12 @@ function PlanPickerContent() {
       });
       const json = await res.json().catch(() => ({}));
       if (cancelled) return;
-      await load();
+      await load({ silent: true });
       if (json.data?.restored) {
         setOk("Payment cancelled. Your current plan (including trial) is unchanged.");
         router.replace("/reseller/dashboard");
         router.refresh();
       } else {
-        setErr(null);
         setOk("Payment cancelled.");
       }
     })();
@@ -124,6 +143,87 @@ function PlanPickerContent() {
       cancelled = true;
     };
   }, [billingCancelled, load, router]);
+
+  // Poll payment status without reloading the whole page.
+  useEffect(() => {
+    if (!paymentWait) return;
+
+    pollStartedAt.current = Date.now();
+    setWaitSeconds(0);
+
+    const tick = setInterval(() => {
+      if (pollStartedAt.current) {
+        setWaitSeconds(Math.floor((Date.now() - pollStartedAt.current) / 1000));
+      }
+    }, 1000);
+
+    let stopped = false;
+
+    const poll = async () => {
+      const billRes = await resellerJson<BillingPayload>("/api/v1/reseller/billing");
+      if (stopped || !billRes.ok || !billRes.data) return;
+
+      if (planPaymentSettled(billRes.data, paymentWait.planId)) {
+        stopped = true;
+        setPaymentWait(null);
+        setCheckoutPlan(null);
+        router.replace("/reseller/dashboard?billing=success");
+        router.refresh();
+      }
+    };
+
+    const interval = setInterval(() => void poll(), 3000);
+    void poll();
+
+    const timeout = setTimeout(async () => {
+      if (stopped) return;
+      stopped = true;
+      await fetch("/api/v1/reseller/billing", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+        },
+        body: JSON.stringify({
+          action: "abandon_checkout",
+          paymentReference: paymentWait.paymentReference,
+        }),
+      });
+      setPaymentWait(null);
+      setCheckoutPlan(null);
+      setErr("Payment not confirmed in time. Your current plan is unchanged — try again when ready.");
+      await load({ silent: true });
+    }, 120_000);
+
+    return () => {
+      stopped = true;
+      clearInterval(tick);
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [paymentWait, load, router]);
+
+  async function abandonWaitingPayment() {
+    if (!paymentWait) return;
+    await fetch("/api/v1/reseller/billing", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
+      },
+      body: JSON.stringify({
+        action: "abandon_checkout",
+        paymentReference: paymentWait.paymentReference,
+      }),
+    });
+    setPaymentWait(null);
+    setCheckoutPlan(null);
+    setErr(null);
+    setOk("Payment cancelled. Your current plan is unchanged.");
+    await load({ silent: true });
+  }
 
   function openCheckout(plan: PublicResellerPlan) {
     setErr(null);
@@ -141,6 +241,7 @@ function PlanPickerContent() {
     setErr(null);
     setOk(null);
 
+    const plan = plans.find((p) => p.id === planId) || checkoutPlan;
     const payload: Record<string, string> = { action: "subscribe", planId };
     if (method) payload.paymentMethod = method;
     if (method === "MOBILE" && payPhone) payload.phone = payPhone.replace(/\s/g, "");
@@ -167,40 +268,20 @@ function PlanPickerContent() {
       return true;
     }
 
-    if (json.data?.polling) {
-      setMobileWaiting(true);
-      setOk("Check your phone and approve the mobile money prompt.");
-      const deadline = Date.now() + 120_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const billRes = await resellerJson<BillingPayload>("/api/v1/reseller/billing");
-        if (billRes.ok && billRes.data?.access.ok) {
-          setMobileWaiting(false);
-          setCheckoutPlan(null);
-          await load();
-          router.replace("/reseller/dashboard?billing=success");
-          router.refresh();
-          return true;
-        }
-      }
-      setMobileWaiting(false);
-      await fetch("/api/v1/reseller/billing", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("ssdomada_token") || ""}`,
-        },
-        body: JSON.stringify({ action: "abandon_checkout" }),
-      });
-      await load();
+    if (json.data?.polling && plan) {
       setCheckoutPlan(null);
-      setErr("Payment not confirmed. Your trial or current plan is unchanged — try again when ready.");
-      return false;
+      setPaymentWait({
+        planId: plan.id,
+        planName: plan.name,
+        price: plan.price,
+        phone: payPhone?.replace(/\s/g, "") || phone,
+        paymentReference: json.data.paymentReference,
+      });
+      return true;
     }
 
     setCheckoutPlan(null);
-    await load();
+    await load({ silent: true });
     router.replace("/reseller/dashboard");
     router.refresh();
     return true;
@@ -212,10 +293,7 @@ function PlanPickerContent() {
       setErr("Enter a valid Tanzanian mobile money number");
       return;
     }
-    if (
-      paymentMethod === "WALLET" &&
-      (billing?.wallet?.balance ?? 0) < checkoutPlan.price
-    ) {
+    if (paymentMethod === "WALLET" && (billing?.wallet?.balance ?? 0) < checkoutPlan.price) {
       setErr(
         `Insufficient wallet balance. You have ${formatTzs(billing?.wallet?.balance ?? 0)} but need ${formatTzs(checkoutPlan.price)}.`,
       );
@@ -241,8 +319,55 @@ function PlanPickerContent() {
     if (!res.ok) setErr(json.error || "Cancel failed");
     else {
       setOk("Cancellation scheduled. Your plan stays active until the period ends.");
-      await load();
+      await load({ silent: true });
     }
+  }
+
+  if (paymentWait) {
+    return (
+      <div className="max-w-lg mx-auto py-16 px-4">
+        <div className="rounded-3xl border border-gold-20 bg-gradient-to-br from-gold-5/30 via-onyx-900 to-onyx-950 p-8 text-center shadow-2xl">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gold/15 border border-gold/25 flex items-center justify-center mb-6">
+            <Smartphone className="w-8 h-8 text-gold animate-pulse" />
+          </div>
+          <h1 className="text-2xl font-black text-white tracking-tight">Waiting for payment</h1>
+          <p className="text-onyx-300 mt-2 text-sm leading-relaxed">
+            We sent a mobile money prompt to{" "}
+            <span className="text-white font-semibold">{paymentWait.phone}</span>. Approve it on your phone to
+            activate <span className="text-gold font-semibold">{paymentWait.planName}</span>.
+          </p>
+          <div className="mt-6 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-left space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-onyx-400">Plan</span>
+              <span className="font-bold text-white">{paymentWait.planName}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-onyx-400">Amount</span>
+              <span className="font-bold text-gold">{formatTzs(paymentWait.price)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-onyx-400">Status</span>
+              <span className="inline-flex items-center gap-1.5 text-amber-300 font-semibold">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Checking… {waitSeconds}s
+              </span>
+            </div>
+          </div>
+          <p className="text-xs text-onyx-500 mt-5">
+            Stay on this page until payment is confirmed. Do not close the browser.
+          </p>
+          <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+            <button
+              type="button"
+              onClick={() => void abandonWaitingPayment()}
+              className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-onyx-300 hover:bg-white/5 transition-colors"
+            >
+              Cancel payment
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (loading) {
@@ -298,9 +423,12 @@ function PlanPickerContent() {
       )}
 
       {billing?.subscription?.status === "PAST_DUE" && !billing.access.ok && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Payment pending — complete checkout for <strong className="text-white">{billing.subscription.plan.name}</strong> or
-          choose another plan.
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 flex gap-3">
+          <Clock className="w-5 h-5 shrink-0 text-amber-300" />
+          <span>
+            Payment pending — complete checkout for <strong className="text-white">{billing.subscription.plan.name}</strong> or
+            choose another plan.
+          </span>
         </div>
       )}
 
@@ -409,7 +537,7 @@ function PlanPickerContent() {
       {checkoutPlan && (
         <div
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-          onClick={() => !mobileWaiting && setCheckoutPlan(null)}
+          onClick={() => setCheckoutPlan(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -417,9 +545,8 @@ function PlanPickerContent() {
           >
             <button
               type="button"
-              disabled={mobileWaiting}
               onClick={() => setCheckoutPlan(null)}
-              className="absolute top-4 right-4 text-onyx-400 hover:text-white transition-colors disabled:opacity-40"
+              className="absolute top-4 right-4 text-onyx-400 hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -442,7 +569,7 @@ function PlanPickerContent() {
                   <button
                     key={opt.id}
                     type="button"
-                    disabled={disabled || mobileWaiting}
+                    disabled={disabled || busyPlanId !== null}
                     onClick={() => setPaymentMethod(opt.id)}
                     className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all ${
                       paymentMethod === opt.id
@@ -489,18 +616,16 @@ function PlanPickerContent() {
 
             <button
               type="button"
-              disabled={busyPlanId !== null || mobileWaiting || (paymentMethod === "WALLET" && !canPayWithWallet)}
+              disabled={busyPlanId !== null || (paymentMethod === "WALLET" && !canPayWithWallet)}
               onClick={() => void confirmCheckout()}
               className="w-full rounded-xl bg-gold py-3 text-sm font-black text-onyx-950 shadow-lg shadow-gold/25 hover:bg-gold-400 disabled:opacity-50 inline-flex items-center justify-center gap-2"
             >
-              {(busyPlanId || mobileWaiting) && <Loader2 className="w-4 h-4 animate-spin" />}
-              {mobileWaiting
-                ? "Waiting for payment…"
-                : paymentMethod === "MOBILE"
-                  ? "Send payment prompt"
-                  : paymentMethod === "CARD"
-                    ? "Continue to card checkout"
-                    : "Pay from wallet"}
+              {busyPlanId !== null && <Loader2 className="w-4 h-4 animate-spin" />}
+              {paymentMethod === "MOBILE"
+                ? "Send payment prompt"
+                : paymentMethod === "CARD"
+                  ? "Continue to card checkout"
+                  : "Pay from wallet"}
             </button>
           </div>
         </div>

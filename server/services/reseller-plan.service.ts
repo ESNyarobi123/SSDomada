@@ -506,8 +506,15 @@ export class ResellerPlanService {
     ]);
     const sub = usage.subscription;
     const access = accessSnapshot.access;
+    const pending = parsePendingCheckout(sub?.snapshotJson);
     return {
       ...usage,
+      pendingCheckout: pending
+        ? {
+            targetPlanId: pending.targetPlanId,
+            paymentReference: pending.paymentReference,
+          }
+        : null,
       wallet: {
         balance: reseller?.walletBalance ?? 0,
         currency: reseller?.currency ?? "TZS",
