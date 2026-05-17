@@ -130,16 +130,6 @@ export default function ResellerSitesPage() {
         </div>
       )}
 
-      {/* ── Chart ── */}
-      {!loading && sites.length > 0 && (
-        <ChartPanel
-          title="Devices per site"
-          subtitle="Number of access points at each location."
-        >
-          <Histogram items={deviceHistogram} variant="sky" barHeightPx={120} formatValue={(n) => `${Math.round(n)} APs`} />
-        </ChartPanel>
-      )}
-
       {/* ── Site cards ── */}
       {loading ? (
         <div className="flex items-center gap-3 py-20 text-onyx-400">
@@ -222,6 +212,15 @@ export default function ResellerSitesPage() {
             ))
           )}
         </div>
+      )}
+
+      {!loading && sites.length > 0 && (
+        <ChartPanel
+          title="Devices per site"
+          subtitle="Number of access points at each location."
+        >
+          <Histogram items={deviceHistogram} variant="sky" barHeightPx={120} formatValue={(n) => `${Math.round(n)} APs`} />
+        </ChartPanel>
       )}
 
       {/* ── Create site modal ── */}

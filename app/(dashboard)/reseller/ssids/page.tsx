@@ -179,16 +179,6 @@ export default function ResellerSsidsPage() {
         </div>
       )}
 
-      {/* ── Chart ── */}
-      {!loading && ssidsBySite.length > 0 && (
-        <ChartPanel
-          title="SSIDs by site"
-          subtitle="How many WiFi names you have at each site."
-        >
-          <RankedBars rows={ssidsBySite} formatValue={(n) => `${Math.round(n)} SSIDs`} maxRows={12} />
-        </ChartPanel>
-      )}
-
       {/* ── SSID table ── */}
       {loading ? (
         <div className="flex items-center gap-3 py-20 text-onyx-400">
@@ -284,6 +274,15 @@ export default function ResellerSsidsPage() {
             </table>
           )}
         </div>
+      )}
+
+      {!loading && ssidsBySite.length > 0 && (
+        <ChartPanel
+          title="SSIDs by site"
+          subtitle="How many WiFi names you have at each site."
+        >
+          <RankedBars rows={ssidsBySite} formatValue={(n) => `${Math.round(n)} SSIDs`} maxRows={12} />
+        </ChartPanel>
       )}
 
       {/* ── New SSID modal ── */}

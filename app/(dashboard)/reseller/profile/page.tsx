@@ -2,8 +2,35 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Save, ExternalLink, Copy, Router, MapPin, Globe, Building2, User, Phone, FileText } from "lucide-react";
+import {
+  Loader2,
+  Save,
+  ExternalLink,
+  Copy,
+  Router,
+  Globe,
+  Building2,
+  User,
+  Phone,
+  FileText,
+  Settings,
+  Palette,
+  Sparkles,
+  Check,
+} from "lucide-react";
 import { resellerJson } from "@/lib/reseller-fetch";
+import {
+  AccountAlert,
+  AccountInput,
+  AccountPageHeader,
+  AccountPageShell,
+  AccountPrimaryButton,
+  AccountSecondaryButton,
+  AccountSection,
+  AccountTextarea,
+  FieldLabel,
+  StatPill,
+} from "@/components/reseller/ResellerAccountUi";
 
 type Profile = {
   companyName: string;
@@ -19,6 +46,14 @@ type Profile = {
   planFeatures?: { customBranding: boolean };
 };
 
+function initials(name: string | null) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return parts.length >= 2
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    : name.slice(0, 2).toUpperCase();
+}
+
 export default function ResellerProfilePage() {
   const [p, setP] = useState<Profile | null>(null);
   const [form, setForm] = useState({
@@ -33,6 +68,7 @@ export default function ResellerProfilePage() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -90,18 +126,26 @@ export default function ResellerProfilePage() {
     else {
       setOk(true);
       void load();
+      window.setTimeout(() => setOk(false), 4000);
     }
+  }
+
+  async function copyPortal(url: string) {
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   }
 
   if (loading && !p && !err) {
     return (
       <div className="flex items-center gap-3 py-20 text-onyx-400">
         <Loader2 className="w-8 h-8 animate-spin text-gold" />
+        Loading profile…
       </div>
     );
   }
   if (err && !p) {
-    return <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>;
+    return <AccountAlert variant="error">{err}</AccountAlert>;
   }
   if (!p) return null;
 
@@ -109,215 +153,193 @@ export default function ResellerProfilePage() {
   const portal = `${origin}${p.portalUrl}`;
   const canUseCustomBranding = Boolean(p.planFeatures?.customBranding);
 
-  function initials(name: string | null) {
-    if (!name) return "?";
-    const parts = name.trim().split(/\s+/);
-    return parts.length >= 2 ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase() : name.slice(0, 2).toUpperCase();
-  }
-
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      {/* ── Header ── */}
-      <div>
-        <h1 className="text-3xl md:text-4xl font-black text-white tracking-tight">Profile & branding</h1>
-        <p className="text-onyx-400 mt-1">
-          Your company name, logo, and public WiFi login link. Contact support if you need to change your login address.
-        </p>
-      </div>
+    <AccountPageShell>
+      <AccountPageHeader
+        title="Profile & brand"
+        description="How guests see your business — company details, portal link, and optional branding on higher plans."
+        actions={
+          <>
+            <AccountSecondaryButton href="/reseller/settings">
+              <Settings className="w-4 h-4" />
+              Account settings
+            </AccountSecondaryButton>
+            <AccountSecondaryButton href="/reseller/captive-portal">
+              <Palette className="w-4 h-4" />
+              Captive portal
+            </AccountSecondaryButton>
+          </>
+        }
+      />
 
-      {/* ── Avatar + identity ── */}
-      <div className="rounded-2xl border border-gold-10 bg-gradient-to-br from-gold-5/30 via-transparent to-transparent p-5 relative overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-gold-20 to-transparent opacity-50" />
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-gold-10 flex items-center justify-center shrink-0">
+      {/* Hero */}
+      <div className="relative overflow-hidden rounded-2xl border border-gold-20 bg-gradient-to-br from-gold-5/50 via-onyx-900/80 to-onyx-950 p-6 md:p-8">
+        <div className="absolute -top-16 -right-16 h-48 w-48 rounded-full bg-gold/10 blur-3xl pointer-events-none" />
+        <div className="relative flex flex-col md:flex-row md:items-center gap-6">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-gold-25 bg-gold-10 shadow-lg shadow-gold/10 overflow-hidden">
             {p.logo ? (
-              <img src={p.logo} alt="Logo" className="w-12 h-12 rounded-xl object-cover" />
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={p.logo} alt="" className="h-full w-full object-cover" />
             ) : (
-              <span className="text-xl font-black text-gold">{initials(p.companyName)}</span>
+              <span className="text-2xl font-black text-gold">{initials(p.companyName)}</span>
             )}
           </div>
-          <div className="min-w-0">
-            <h2 className="text-lg font-bold text-white truncate">{p.companyName}</h2>
-            <div className="text-xs text-gold-600-op font-mono">@{p.brandSlug}</div>
-            <div className="text-xs text-onyx-400 mt-0.5">{p.user.email}</div>
+          <div className="min-w-0 flex-1">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-gold-30 bg-gold-10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-gold mb-2">
+              <Sparkles className="w-3 h-3" />
+              {p.currency} · Reseller
+            </div>
+            <h2 className="text-2xl md:text-3xl font-black text-white truncate">{p.companyName}</h2>
+            <p className="text-sm text-onyx-400 mt-1">
+              <span className="font-mono text-gold">@{p.brandSlug}</span>
+              <span className="mx-2 text-onyx-600">·</span>
+              {p.user.email}
+            </p>
+            {p.user.name && <p className="text-sm text-onyx-300 mt-0.5">{p.user.name}</p>}
           </div>
         </div>
       </div>
 
-      {/* ── Stat cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="rounded-xl border border-gold-10 bg-gradient-to-br from-gold-5/30 via-transparent to-transparent p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 rounded-md bg-gold-10 flex items-center justify-center">
-              <Router className="w-3 h-3 text-gold" />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gold-600-op">Devices</span>
-          </div>
-          <div className="text-2xl font-black text-white">{p.stats.devices}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 rounded-md bg-sky-500/10 flex items-center justify-center">
-              <Globe className="w-3 h-3 text-sky-400" />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Sites</span>
-          </div>
-          <div className="text-2xl font-black text-white">{p.stats.sites}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 rounded-md bg-emerald-500/10 flex items-center justify-center">
-              <Building2 className="w-3 h-3 text-emerald-400" />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Packages</span>
-          </div>
-          <div className="text-2xl font-black text-white">{p.stats.packages}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-6 h-6 rounded-md bg-amber-500/10 flex items-center justify-center">
-              <FileText className="w-3 h-3 text-amber-400" />
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-onyx-400">Payments</span>
-          </div>
-          <div className="text-2xl font-black text-white">{p.stats.payments}</div>
-        </div>
+        <StatPill label="Devices" value={p.stats.devices} icon={<Router className="w-3.5 h-3.5" />} variant="gold" />
+        <StatPill label="Sites" value={p.stats.sites} icon={<Globe className="w-3.5 h-3.5" />} />
+        <StatPill label="Packages" value={p.stats.packages} icon={<Building2 className="w-3.5 h-3.5" />} />
+        <StatPill label="Payments" value={p.stats.payments} icon={<FileText className="w-3.5 h-3.5" />} />
       </div>
 
-      {/* ── Portal URL ── */}
-      <div className="rounded-xl border border-gold-10 bg-gradient-to-br from-gold-5/20 via-transparent to-transparent p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-gold-600-op">WiFi login page</div>
-          <div className="font-mono text-sm text-gold break-all mt-0.5">{portal}</div>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <a href={portal} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-xl bg-gold px-3.5 py-2 text-xs font-bold text-onyx-950 shadow-lg shadow-gold/20 hover:bg-gold-400 transition-all">
-            <ExternalLink className="w-3 h-3" />
-            Open
-          </a>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard.writeText(portal);
-            }}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-gold-20 bg-gold-10 px-3.5 py-2 text-xs font-bold text-gold hover:bg-gold-20 transition-all"
+      <div className="grid lg:grid-cols-[1fr_320px] gap-6 items-start">
+        <form onSubmit={save} className="space-y-5 min-w-0">
+          {err && <AccountAlert variant="error">{err}</AccountAlert>}
+          {ok && <AccountAlert variant="success">Profile saved successfully.</AccountAlert>}
+
+          <AccountSection
+            title="Business identity"
+            description="Shown on invoices and your public WiFi login."
+            icon={<User className="w-5 h-5" />}
           >
-            <Copy className="w-3 h-3" />
-            Copy
-          </button>
-        </div>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div>
+                <FieldLabel hint="Cannot be changed here">Brand slug</FieldLabel>
+                <AccountInput readOnly value={p.brandSlug} className="text-onyx-400 bg-white/[0.02]" />
+              </div>
+              <div>
+                <FieldLabel>Your name</FieldLabel>
+                <AccountInput
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Contact person"
+                />
+              </div>
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Company name</FieldLabel>
+              <AccountInput
+                required
+                value={form.companyName}
+                onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))}
+              />
+            </div>
+            <div className="mt-4">
+              <FieldLabel>
+                Logo URL
+                {!canUseCustomBranding && (
+                  <span className="text-onyx-500 normal-case font-normal"> — upgrade plan for custom branding</span>
+                )}
+              </FieldLabel>
+              <AccountInput
+                value={form.logo}
+                onChange={(e) => setForm((f) => ({ ...f, logo: e.target.value }))}
+                disabled={!canUseCustomBranding}
+                placeholder="https://…"
+              />
+            </div>
+          </AccountSection>
+
+          <AccountSection
+            title="Contact & about"
+            description="Optional details for support and guest-facing copy."
+            icon={<Phone className="w-5 h-5" />}
+            accent="sky"
+          >
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div>
+                <FieldLabel>Phone</FieldLabel>
+                <AccountInput
+                  value={form.phone}
+                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="+255…"
+                />
+              </div>
+              <div>
+                <FieldLabel>Address</FieldLabel>
+                <AccountInput
+                  value={form.address}
+                  onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+                  placeholder="City / area"
+                />
+              </div>
+            </div>
+            <div className="mt-4">
+              <FieldLabel>Short description</FieldLabel>
+              <AccountTextarea
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                disabled={!canUseCustomBranding}
+                rows={3}
+                placeholder="What guests should know about your WiFi…"
+              />
+            </div>
+            <p className="mt-4 text-xs text-onyx-500 rounded-xl bg-white/[0.03] border border-white/[0.06] px-3 py-2.5">
+              Login email: <span className="text-onyx-300">{p.user.email}</span>. Contact support to change it.
+            </p>
+          </AccountSection>
+
+          <AccountPrimaryButton type="submit" loading={saving}>
+            <Save className="w-4 h-4" />
+            {saving ? "Saving…" : "Save profile"}
+          </AccountPrimaryButton>
+        </form>
+
+        <aside className="space-y-4 lg:sticky lg:top-4">
+          <AccountSection
+            title="Guest WiFi link"
+            description="Share this URL or QR so customers open your captive portal."
+            icon={<Globe className="w-5 h-5" />}
+            accent="emerald"
+          >
+            <p className="font-mono text-xs text-gold break-all leading-relaxed bg-onyx-950/60 rounded-xl border border-white/[0.06] p-3">
+              {portal}
+            </p>
+            <div className="flex flex-wrap gap-2 mt-4">
+              <a
+                href={portal}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex flex-1 min-w-[120px] items-center justify-center gap-1.5 rounded-xl bg-gold px-3 py-2.5 text-xs font-bold text-onyx-950 hover:bg-gold-400 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Open portal
+              </a>
+              <button
+                type="button"
+                onClick={() => void copyPortal(portal)}
+                className="inline-flex flex-1 min-w-[120px] items-center justify-center gap-1.5 rounded-xl border border-gold-25 bg-gold-10 px-3 py-2.5 text-xs font-bold text-gold hover:bg-gold-20 transition-colors"
+              >
+                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+          </AccountSection>
+
+          <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 text-xs text-onyx-500 leading-relaxed">
+            Custom domains need DNS pointed to SSDomada — see{" "}
+            <Link href="/docs" className="text-gold hover:underline font-semibold">
+              documentation
+            </Link>{" "}
+            or contact support.
+          </div>
+        </aside>
       </div>
-
-      {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
-      {ok && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">Saved.</div>}
-
-      {/* ── Form sections ── */}
-      <form onSubmit={save} className="space-y-5">
-        {/* Identity section */}
-        <div className="rounded-2xl border border-gold-10 bg-gradient-to-br from-gold-5/20 via-transparent to-transparent p-5 space-y-4 relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-gold-20 to-transparent opacity-50" />
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-8 h-8 rounded-lg bg-gold-10 flex items-center justify-center">
-              <User className="w-4 h-4 text-gold" />
-            </div>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Identity</h3>
-          </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Brand slug (read only)</label>
-              <input readOnly value={p.brandSlug} className="mt-1.5 w-full rounded-xl border border-white/5 bg-white/[0.02] px-4 py-2.5 text-sm text-onyx-400" />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Your name</label>
-              <input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Company name</label>
-            <input
-              required
-              value={form.companyName}
-              onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))}
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">
-              Logo URL {!canUseCustomBranding && <span className="text-onyx-500 normal-case">(upgrade required)</span>}
-            </label>
-            <input
-              value={form.logo}
-              onChange={(e) => setForm((f) => ({ ...f, logo: e.target.value }))}
-              disabled={!canUseCustomBranding}
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors disabled:opacity-45"
-              placeholder="https://…"
-            />
-          </div>
-        </div>
-
-        {/* Contact section */}
-        <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-white/[0.04] to-transparent p-5 space-y-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-8 h-8 rounded-lg bg-sky-500/10 flex items-center justify-center">
-              <Phone className="w-4 h-4 text-sky-400" />
-            </div>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Contact</h3>
-          </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Phone</label>
-              <input
-                value={form.phone}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Address</label>
-              <input
-                value={form.address}
-                onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-                className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-bold text-gold-600-op uppercase tracking-wider">Description</label>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              rows={3}
-              disabled={!canUseCustomBranding}
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-onyx-500 focus:border-gold-30 focus:ring-1 focus:ring-gold/20 outline-none transition-colors resize-y disabled:opacity-45"
-            />
-          </div>
-          <div className="text-xs text-onyx-500">
-            Login email: <span className="text-onyx-300">{p.user.email}</span>. Contact support to change it.
-          </div>
-        </div>
-
-        {/* Save */}
-        <button
-          type="submit"
-          disabled={saving}
-          className="inline-flex items-center gap-2 rounded-xl bg-gold px-6 py-3 text-sm font-bold text-onyx-950 shadow-lg shadow-gold/20 hover:bg-gold-400 disabled:opacity-50 transition-all"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Saving…" : "Save profile"}
-        </button>
-      </form>
-
-      <p className="text-xs text-onyx-500">
-        Custom domains point DNS to SSDomada —{" "}
-        <Link href="/docs" className="text-gold hover:underline">
-          read docs
-        </Link>{" "}
-        or contact support.
-      </p>
-    </div>
+    </AccountPageShell>
   );
 }

@@ -353,23 +353,6 @@ export default function ResellerPackagesPage() {
 
       {err && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{err}</div>}
 
-      {/* ── Chart ── */}
-      {!loading && list.length > 0 && (
-        <ChartPanel
-          title="Revenue leaders"
-          subtitle="Total sales earned per plan (all time)."
-        >
-          <RankedBars
-            rows={list.map((p) => ({
-              name: p.name,
-              value: p.sales.totalRevenue,
-              hint: `${p.sales.totalSold} sales · ${formatTzs(p.sales.totalRevenue)}`,
-            }))}
-            formatValue={(n) => formatTzs(Math.round(n))}
-          />
-        </ChartPanel>
-      )}
-
       {/* ── Package table ── */}
       {loading ? (
         <div className="flex items-center gap-3 py-20 text-onyx-400">
@@ -473,6 +456,22 @@ export default function ResellerPackagesPage() {
             </table>
           )}
         </div>
+      )}
+
+      {!loading && list.length > 0 && (
+        <ChartPanel
+          title="Revenue leaders"
+          subtitle="Total sales earned per plan (all time)."
+        >
+          <RankedBars
+            rows={list.map((p) => ({
+              name: p.name,
+              value: p.sales.totalRevenue,
+              hint: `${p.sales.totalSold} sales · ${formatTzs(p.sales.totalRevenue)}`,
+            }))}
+            formatValue={(n) => formatTzs(Math.round(n))}
+          />
+        </ChartPanel>
       )}
 
       {/* ── Create/Edit modal ── */}
